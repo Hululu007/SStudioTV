@@ -48,6 +48,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -198,6 +199,11 @@ fun LivePlayer(r: Route.LivePlay) {
     var banner by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var showBanner by remember { mutableStateOf(true) }
     var overlay by remember { mutableStateOf(false) }
+    /** 真在出画面（含缓冲）：只有这时候不让电视进屏保 */
+    var awake by remember { mutableStateOf(false) }
+    /** 最后一次按遥控器；太久没按（关了电视盒子还开着）就停播 */
+    var lastKey by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var asleep by remember { mutableStateOf(false) }
     val ch = groups.getOrNull(gi)?.channels?.getOrNull(ci)
 
     val player = remember {
@@ -213,6 +219,7 @@ fun LivePlayer(r: Route.LivePlay) {
         val c = groups.getOrNull(gi)?.channels?.getOrNull(ci) ?: return
         val u = c.urls.getOrNull(ui) ?: return
         status = "正在连接…"
+        asleep = false
         Live.lastChannel = c.name
         val item = MediaItem.Builder().setUri(u).apply {
             if (u.contains(".m3u8", true)) setMimeType(MimeTypes.APPLICATION_M3U8)
@@ -249,12 +256,17 @@ fun LivePlayer(r: Route.LivePlay) {
                     Player.STATE_BUFFERING -> if (status == null) status = "缓冲中…"
                     Player.STATE_READY -> status = null
                 }
+                awake = s == Player.STATE_READY || s == Player.STATE_BUFFERING
+            }
+            override fun onPlayWhenReadyChanged(p: Boolean, reason: Int) {
+                awake = p && (player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_BUFFERING)
             }
             override fun onPlayerError(e: PlaybackException) {
                 android.util.Log.w("LivePlayer", "error ${ch?.name} #$ui", e)
                 val c = groups.getOrNull(gi)?.channels?.getOrNull(ci) ?: return
-                if (ui + 1 < c.urls.size) { ui++; tune() }
-                else status = "「${c.name}」暂时看不了（${why(e)}）。↑↓ 换台" + if (c.urls.size > 1) "，←→ 再试别的信号" else ""
+                if (ui + 1 < c.urls.size) { ui++; tune(); return }
+                awake = false
+                status = "「${c.name}」暂时看不了（${why(e)}）。↑↓ 换台" + if (c.urls.size > 1) "，←→ 再试别的信号" else ""
             }
         }
         player.addListener(l)
@@ -264,13 +276,23 @@ fun LivePlayer(r: Route.LivePlay) {
     // 按主页键、进屏保：直播停掉（不在后台出声、不白跑流量），回来重新连当前台
     OnAppHidden(onHide = { player.stop() }, onShow = { tune() })
     LaunchedEffect(Unit) { delay(50); runCatching { focus.requestFocus() } }
+    // 4 个小时没按过遥控器：多半是电视关了、盒子没关，停掉别白跑流量、别一直亮屏
+    LaunchedEffect(lastKey) {
+        delay(4 * 3600_000L)
+        player.stop()
+        asleep = true
+        status = "已经 4 个小时没操作，停播了。按 OK 继续看"
+    }
     LaunchedEffect(banner) { showBanner = true; delay(4000); showBanner = false }
     BackHandler(enabled = overlay) { overlay = false; runCatching { focus.requestFocus() } }
 
     Box(
-        Modifier.fillMaxSize().background(Color.Black).focusRequester(focus)
+        Modifier.fillMaxSize().background(Color.Black)
+            .onPreviewKeyEvent { lastKey = System.currentTimeMillis(); false }
+            .focusRequester(focus)
             .onKeyEvent { e ->
                 if (overlay || e.type != KeyEventType.KeyDown) return@onKeyEvent false
+                if (asleep && e.key in listOf(Key.DirectionCenter, Key.Enter)) { tune(); return@onKeyEvent true }
                 when (e.key) {
                     Key.DirectionUp, Key.ChannelUp -> move(-1)
                     Key.DirectionDown, Key.ChannelDown -> move(1)
@@ -291,9 +313,9 @@ fun LivePlayer(r: Route.LivePlay) {
                     layoutParams = ViewGroup.LayoutParams(-1, -1)
                     this.player = player
                     isFocusable = false
-                    keepScreenOn = true
                 }
             },
+            update = { it.keepScreenOn = awake },
             modifier = Modifier.fillMaxSize(),
         )
         if (!overlay) status?.let { T(it, 13.sp, Palette.T2, modifier = Modifier.align(Alignment.Center)) }

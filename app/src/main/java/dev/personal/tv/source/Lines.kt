@@ -1,6 +1,8 @@
 package dev.personal.tv.source
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -56,6 +58,8 @@ class LineSet(val titleId: String) {
     val failed = mutableStateMapOf<String, String>()
     /** 已经搜完的站点 key（主线程读写） */
     val doneSites = HashSet<String>()
+    /** 因为网络错误（连不上、超时）没搜成的站点数 */
+    var netErrors = 0
 }
 
 /**
@@ -75,6 +79,15 @@ object Lines {
     }
 
     fun clear() = sets.clear()
+
+    /** 有没有联网。不看「已验证」：国内连不上谷歌的检测地址，验证永远不过 */
+    fun online(ctx: Context): Boolean {
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return true
+        return try {
+            val n = cm.activeNetwork ?: return false
+            cm.getNetworkCapabilities(n)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ?: false
+        } catch (e: Throwable) { true }
+    }
 
     /** 播放正在解析时 > 0：线路搜索先不开新的站点，把插件进程让给播放（实测并发搜索时解析从 4 秒拖到 36 秒） */
     private val playing = MutableStateFlow(0)
@@ -114,12 +127,12 @@ object Lines {
         )
 
     /**
-     * 选集按这条线路显示：分集最全的（综艺有的站有加更、上下期，有的站没有），一样多时上次播的那条优先。
+     * 选集按这条线路显示：正片最全的（综艺有的站有加更、上下期，有的站没有；夹了上百条花絮、纯享的不算多），一样多时上次播的那条优先。
      * 播放时按名字到各条线路里找同一集，所以显示哪条都能播。
      */
     fun ref(set: LineSet?, lastKey: String?): PlayLine? {
         if (set == null) return null
-        return ordered(set, lastKey, emptyList(), pinned = true).maxByOrNull { it.episodes.size }
+        return ordered(set, lastKey, emptyList(), pinned = true).maxByOrNull { Eps.mainCount(it.episodes) }
     }
 
     private suspend fun search(ctx: Context, t: Title, set: LineSet) {
@@ -150,6 +163,10 @@ object Lines {
                 }
             }
         }
+        // 一条都没搜到、又是网络的问题：说网络不通，别说「站点里都没有」；有 error 下次进来马上重搜
+        if (set.lines.isEmpty() && (!online(ctx) || set.netErrors > 0 && set.netErrors * 2 >= set.searched)) {
+            set.error = "网络好像不通，没搜到线路。网络好了再试"
+        }
         set.done = true
         Log.i(TAG, "${t.name} · ${set.lines.size} 条线路 · ${set.searched}/${set.total} 站 · ${System.currentTimeMillis() - t0}ms")
         if (t.isEpisodic && set.lines.isNotEmpty()) {
@@ -172,6 +189,7 @@ object Lines {
             withTimeoutOrNull(15_000) { job.await() }
         } catch (e: Throwable) {
             Log.d(TAG, "${s.name}: ${e.message}")
+            if (generateSequence(e) { it.cause }.take(5).any { it is java.io.IOException }) set.netErrors++
             null
         } ?: return
         for (v in vods) {
@@ -180,7 +198,7 @@ object Lines {
                 // 电影只要一集的来源；剧集的来源只有一集多半是预告
                 if (!t.isEpisodic && f.episodes.size > 3) continue
                 if (t.isEpisodic && f.episodes.size == 1 && (t.totalEps > 1 || t.airedEps > 1)) continue
-                val line = PlayLine(s.key, s.name, f.name, v.name, v.remarks, Eps.ascending(f.episodes))
+                val line = PlayLine(s.key, s.name, f.name, v.name, v.remarks, Eps.ascending(Eps.trimCommon(f.episodes), t.name))
                 if (set.lines.none { it.key == line.key }) set.lines.add(line)
             }
         }

@@ -161,7 +161,19 @@ fun PlayerScreen(r: Route.Player) {
     Box(
         Modifier.fillMaxSize().background(Color.Black).onPreviewKeyEvent {
             lastInput = System.nanoTime()
-            if (it.key == Key.MediaPlayPause && it.type == KeyEventType.KeyUp) { ps.togglePlay(); true } else false
+            ps.touch()
+            // 遥控器上单独的播放、暂停、快进、快退、下一集键（语音「暂停」也是发这几个键）
+            val up = it.type == KeyEventType.KeyUp
+            val down = it.type == KeyEventType.KeyDown
+            when (it.key) {
+                Key.MediaPlayPause -> { if (up) ps.togglePlay(); true }
+                Key.MediaPlay -> { if (up && !ps.playing) ps.togglePlay(); true }
+                Key.MediaPause -> { if (up && ps.playing) ps.togglePlay(); true }
+                Key.MediaFastForward -> { if (down) ps.seekBy(30); true }
+                Key.MediaRewind -> { if (down) ps.seekBy(-10); true }
+                Key.MediaNext -> { if (up && t.isEpisodic) ps.playNext(); true }
+                else -> false
+            }
         },
     ) {
         AndroidView(
@@ -175,8 +187,8 @@ fun PlayerScreen(r: Route.Player) {
                     setKeepContentOnPlayerReset(false)
                 }
             },
-            // 播放（含缓冲）时不让电视进屏保；暂停了就随它
-            update = { it.keepScreenOn = ps.playing },
+            // 真在播（含缓冲）时不让电视进屏保；暂停、播完、出错、问「还在看吗」时随它
+            update = { it.keepScreenOn = ps.awake },
             modifier = Modifier.fillMaxSize(),
         )
         // 还没出画面时：模糊海报 + 提示
@@ -196,7 +208,16 @@ fun PlayerScreen(r: Route.Player) {
             ) {
                 T("播放不了", 15.sp, Palette.Bad, FontWeight.Bold)
                 T(it, 11.sp, Palette.T2, lines = 3, lineHeight = 17.sp, modifier = Modifier.padding(top = 6.dp))
-                T("右键：线路面板  ·  返回：退出", 9.5.sp, Palette.T3, modifier = Modifier.padding(top = 10.dp))
+                T("OK：重试  ·  右键：线路面板  ·  返回：退出", 9.5.sp, Palette.T3, modifier = Modifier.padding(top = 10.dp))
+            }
+        }
+        if (ps.askContinue && ps.fail == null) {
+            Column(
+                Modifier.align(Alignment.Center).width(460.dp).background(Palette.Panel, RoundedCornerShape(12.dp)).padding(20.dp),
+            ) {
+                T("还在看吗？", 15.sp, Palette.T1, FontWeight.Bold)
+                T("已经连着自动放了好几集，先停在这里。", 11.sp, Palette.T2, modifier = Modifier.padding(top = 6.dp))
+                T("OK：放下一集  ·  返回：退出", 9.5.sp, Palette.T3, modifier = Modifier.padding(top = 10.dp))
             }
         }
         if (!ps.playing && ps.status == null && ps.fail == null && ps.posMs > 0) {
@@ -213,7 +234,14 @@ fun PlayerScreen(r: Route.Player) {
                     val down = e.type == KeyEventType.KeyDown
                     when (e.key) {
                         Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
-                            if (down) okDown = true else if (okDown) { okDown = false; controls = true }
+                            if (down) okDown = true else if (okDown) {
+                                okDown = false
+                                when {
+                                    ps.fail != null -> ps.retry()
+                                    ps.askContinue -> ps.keepWatching()
+                                    else -> controls = true
+                                }
+                            }
                             true
                         }
                         Key.DirectionUp, Key.DirectionDown -> { if (down) controls = true; true }
@@ -243,7 +271,7 @@ fun PlayerScreen(r: Route.Player) {
                         .padding(start = Dimens.SafeH, end = Dimens.SafeH, bottom = Dimens.SafeV),
                 ) {
                     if (strip) {
-                        EpisodeRow(t, Progress(t.id, ps.epNumber, pos, dur, 0, epName = ps.epName), ps.line, epReq, null, Modifier.offset(x = -Dimens.SafeH).padding(bottom = 8.dp)) { e, name ->
+                        EpisodeRow(t, Progress(t.id, ps.epNumber, pos, dur, 0, ps.line?.key, epName = ps.epName, named = ps.numericLine == false), ps.line, epReq, null, Modifier.offset(x = -Dimens.SafeH).padding(bottom = 8.dp)) { e, name ->
                             ps.playEpisode(e, name); strip = false
                         }
                     }
@@ -334,7 +362,7 @@ private fun ControlButtons(
             nav.toast(if (PlayerPrefs.nightVolume) "夜间音量已开：压低爆炸声，对白听得清" else "夜间音量已关")
         }
         Spacer(Modifier.weight(1f))
-        ps.nextEpisode?.let { n -> if (t.isEpisodic) CtlChip("下一集 · " + ps.epText(n.name, ps.epNumber + 1)) { onNext() } }
+        ps.nextName?.let { n -> if (t.isEpisodic) CtlChip("下一集 · " + ps.nextText(n)) { onNext() } }
     }
 }
 

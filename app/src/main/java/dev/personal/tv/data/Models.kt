@@ -84,9 +84,22 @@ data class Progress(
     val pinned: Boolean = false,
     /** 这一集在线路里的名字（综艺换线路时按名字找同一期）；老记录没有 */
     val epName: String? = null,
+    /**
+     * [ep] 是什么：true = 当时那条线路（[line]）里的位置（按名字分期的综艺）；false = 名字里的集数。
+     * 0.7.3 之前的记录没有（Gson 读出来是 null），按 [epName] 像不像序号猜。
+     */
+    val named: Boolean? = null,
+    /** 存进度时算好的下一集名字（看完以后首页、详情页按它接着放，不用等线路搜完）；没有下一集 = null */
+    val nextName: String? = null,
 ) {
+    /** [ep] 是线路里的位置，不是集数 */
+    fun isNamed(title: String) = named ?: (epName != null && !dev.personal.tv.source.Eps.isNumber(epName, title))
+
+    /** 名字里的集数；按名字分期的没有 */
+    fun episodeNo(title: String): Int? = if (!isNamed(title)) ep else epName?.let { dev.personal.tv.source.Eps.number(it, title) }
+
     /** 「第 3 集」或者「11.01 上」 */
-    fun epText(title: String) = dev.personal.tv.source.Eps.text(epName, ep, title)
+    fun epText(title: String) = dev.personal.tv.source.Eps.text(epName, ep, title, named?.not())
 
     val fraction get() = if (durationSec == 0) 0f else positionSec.toFloat() / durationSec
     val finishedEp get() = durationSec > 0 && positionSec >= durationSec - 60

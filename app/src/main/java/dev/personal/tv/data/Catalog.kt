@@ -30,10 +30,17 @@ import java.io.File
 internal val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 internal val gson = Gson()
 
-/** 存一份 JSON 到 filesDir：先写临时文件再改名，写一半断电不会把旧数据弄坏 */
+/**
+ * 存一份 JSON 到 filesDir：先写临时文件、刷到盘上（fsync）再改名。
+ * 电视棒靠电视 USB 供电，一关电视就断电；不刷盘的话改名可能先落盘、内容还没写进去。
+ */
 internal fun saveJson(f: File, v: Any) {
     val tmp = File(f.parentFile, f.name + ".tmp")
-    tmp.writeText(gson.toJson(v))
+    java.io.FileOutputStream(tmp).use { out ->
+        out.write(gson.toJson(v).toByteArray())
+        out.flush()
+        out.fd.sync()
+    }
     tmp.renameTo(f)
 }
 
@@ -318,7 +325,11 @@ object Store {
                 s.wish?.let { wish.addAll(it) }
                 s.hidden?.let { hidden.addAll(it) }
             }
-        }.onFailure { Log.w("Store", "load", it) }
+        }.onFailure {
+            // 读不出来（写坏了）：先把坏文件留一份，别让下一次保存用空表盖掉，以后还能手动救
+            Log.w("Store", "load", it)
+            runCatching { file.renameTo(File(file.parentFile, "store.json.bad-${System.currentTimeMillis()}")) }
+        }
         appScope.launch {
             snapshotFlow { Triple(progress.toMap(), wish.toList(), hidden.toList()) }.drop(1).debounce(800).collect { (p, w, h) ->
                 runCatching { saveJson(file, Saved(p.values.toList(), w, h)) }.onFailure { Log.w("Store", "save", it) }
@@ -331,9 +342,12 @@ object Store {
             .mapNotNull { p -> Catalog.get(p.titleId)?.let { it to p } }
 
     /** 看完了最新一集，但又出了新集：返回新出的集数 */
-    fun newEpisodes(t: Title, p: Progress): Int =
-        // 综艺按名字分期（上下期、加更），序号和豆瓣的集数对不上，不算
-        if (t.isEpisodic && p.finishedEp && t.airedEps > p.ep && (p.epName == null || dev.personal.tv.source.Eps.isNumber(p.epName, t.name))) t.airedEps - p.ep else 0
+    fun newEpisodes(t: Title, p: Progress): Int {
+        if (!t.isEpisodic || !p.finishedEp || t.airedEps <= p.ep) return 0
+        // 综艺按名字分期（上下期、加更），序号和豆瓣的集数对不上，不算；0.7.1 之前的综艺记录说不清是什么，也不算
+        if (p.isNamed(t.name) || t.isVariety && p.named == null && p.epName == null) return 0
+        return t.airedEps - p.ep
+    }
 
     fun toggleWish(id: String) {
         if (id in wish) wish.remove(id) else wish.add(0, id)

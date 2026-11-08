@@ -50,8 +50,11 @@ import okhttp3.Request
 @OptIn(UnstableApi::class)
 class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startName: String?, private val scope: CoroutineScope) {
     private val TAG = "Play"
-    val player: ExoPlayer = ExoPlayer.Builder(ctx, AudioFx.renderers(ctx)).build()
-    val set: LineSet = Lines.find(ctx, t)
+    // 耳机、蓝牙音箱断开时暂停，不突然从电视喇叭外放
+    val player: ExoPlayer = ExoPlayer.Builder(ctx, AudioFx.renderers(ctx)).setHandleAudioBecomingNoisy(true).build()
+    /** 这部片的线路；断网时一条没搜到，重试时换成重新搜的 */
+    var set: LineSet by mutableStateOf(Lines.find(ctx, t))
+        private set
 
     /** 第几集：当前线路里的序号，从 1 开始 */
     var ep by mutableIntStateOf(startEp)
@@ -78,6 +81,15 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         private set
     /** 换线时给界面的提示 */
     var notice by mutableStateOf<String?>(null)
+    /** 播放器状态（Player.STATE_*） */
+    var state by mutableIntStateOf(Player.STATE_IDLE)
+        private set
+    /** 连着自动放了好几集、很久没人按遥控器：停下来问一句「还在看吗」 */
+    var askContinue by mutableStateOf(false)
+        private set
+
+    /** 真的在出画面（含缓冲）：保持亮屏只看这个。播完、出错、停下来问的时候让电视自己进屏保 */
+    val awake get() = playing && (state == Player.STATE_READY || state == Player.STATE_BUFFERING) && fail == null && !askContinue
 
     private var cfg: TvConfig? = null
     private var job: Job? = null
@@ -86,6 +98,13 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     private var bufferingSince = 0L
     /** 当前线路是用户手动选的 */
     private var pinned = false
+    /** 暂停的时间（0 = 没暂停）；暂停太久再播，播放地址可能过期了，重新解析 */
+    private var pausedAt = 0L
+    /** 退到后台时停掉播放器（放掉解码器），记下位置，回来按 OK 从这里重新解析 */
+    private var resumeMs = -1L
+    /** 连着自动放了几集、最后一次按遥控器的时间 */
+    private var autoPlays = 0
+    private var lastTouch = System.currentTimeMillis()
 
     /** 当前线路的集数（没线路时按豆瓣） */
     val episodeCount get() = line?.episodes?.size ?: maxOf(t.airedEps, 1)
@@ -93,21 +112,30 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     init {
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(s: Int) {
+                state = s
                 when (s) {
                     Player.STATE_READY -> { ready?.complete(true); bufferingSince = 0; if (status == "缓冲中…") status = null }
-                    Player.STATE_BUFFERING -> { if (bufferingSince == 0L) bufferingSince = System.currentTimeMillis() }
+                    Player.STATE_BUFFERING -> { if (bufferingSince == 0L && player.playWhenReady) bufferingSince = System.currentTimeMillis() }
                     Player.STATE_ENDED -> onEnded()
                 }
             }
-            override fun onPlayWhenReadyChanged(p: Boolean, reason: Int) { playing = p }
+            override fun onPlayWhenReadyChanged(p: Boolean, reason: Int) {
+                playing = p
+                pausedAt = if (p) 0 else System.currentTimeMillis()
+                // 暂停时不算卡住；接着播还在缓冲的，从现在重新计时
+                bufferingSince = if (p && player.playbackState == Player.STATE_BUFFERING) System.currentTimeMillis() else 0
+            }
             override fun onPlayerError(e: PlaybackException) {
                 Log.w(TAG, "error ${line?.key}", e)
                 val r = ready
-                if (r != null && r.isActive) r.complete(false) else failover("播放出错（${e.errorCodeName}）")
+                if (r != null && r.isActive) { r.complete(false); return }
+                // 断网不是线路的错：别把好线路一条条记成失败，等网络好了按 OK 重试
+                if (!Lines.online(ctx)) { player.stop(); status = null; fail = "网络断了。网络好了按 OK 重试"; return }
+                failover("播放出错（${e.errorCodeName}）")
             }
         })
         val prev = Store.progress[t.id]
-        val same = prev != null && if (startName != null && prev.epName != null) Eps.key(startName, t.name) == Eps.key(prev.epName, t.name) else prev.ep == startEp
+        val same = prev != null && if (startName != null && prev.epName != null) Eps.same(startName, prev.epName, t.name) else prev.ep == startEp
         if (same && startName == null) epName = prev!!.epName
         val startMs = if (same && !prev!!.finishedEp) prev.positionSec * 1000L else 0L
         pinned = prev?.pinned == true
@@ -116,10 +144,13 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             var tick = 0
             while (true) {
                 delay(500)
-                posMs = player.currentPosition
-                durMs = player.duration.coerceAtLeast(0)
+                // 停掉（退到后台）以后时长读不到了，留着停之前的
+                if (player.playbackState != Player.STATE_IDLE) {
+                    posMs = player.currentPosition
+                    durMs = player.duration.coerceAtLeast(0)
+                }
                 // 播放中途卡住太久也算这条线路不行
-                if (status == null && bufferingSince > 0 && player.playbackState == Player.STATE_BUFFERING &&
+                if (status == null && !hidden && player.playWhenReady && bufferingSince > 0 && player.playbackState == Player.STATE_BUFFERING &&
                     System.currentTimeMillis() - bufferingSince > 20_000
                 ) { bufferingSince = 0; failover("卡住超过 20 秒") }
                 if (++tick % 20 == 0 && player.isPlaying) save()
@@ -127,12 +158,14 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         }
     }
 
-    /** 从头开始（换集、手动换线、自动换线都走这里） */
-    private fun start(ep: Int, startMs: Long, prefer: String?, only: PlayLine? = null) {
+    /** 从头开始（换集、手动换线、自动换线都走这里）。[first]：先试这一条，不行再按平常的顺序换 */
+    private fun start(ep: Int, startMs: Long, prefer: String?, only: PlayLine? = null, first: PlayLine? = null) {
         job?.cancel()
         this.ep = ep
         fail = null
-        job = scope.launch { run(startMs, prefer, only) }
+        askContinue = false
+        resumeMs = -1
+        job = scope.launch { run(startMs, prefer, only, first) }
     }
 
     /**
@@ -140,7 +173,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
      * 为 null：第 [n] 集（按豆瓣集数选的，到线路里按名字里的数字找）。
      */
     fun playEpisode(n: Int, name: String?) {
-        if (fail == null && (if (name != null) name == epName else n == epNumber)) return
+        if (fail == null && (if (name != null) name == epName && n == ep else n == epNumber)) return
         save()
         tried.clear()
         epName = name
@@ -148,31 +181,41 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     }
 
     fun playNext() {
-        val l = line ?: return
-        val e = nextEpisode ?: return
-        playEpisode(l.episodes.indexOf(e) + 1, e.name)
+        val n = nextName ?: return
+        val i = line?.episodes?.indexOfFirst { it.name == n } ?: -1
+        playEpisode(if (i >= 0) i + 1 else ep + 1, n)
     }
 
     /** 当前线路的分集按序号显示（电视剧）；false = 按名字（综艺）；还没线路 = null */
     val numericLine: Boolean? get() = line?.let { Eps.numeric(it.episodes, t.name, t.isVariety) }
 
+    /** 名字里的集数（按序号的线路）；按名字的线路没有 */
+    private val nameNumber: Int? get() = epName?.takeIf { numericLine != false }?.let { Eps.number(it, t.name) }
+
     /** 这一集是第几集（名字里的数字）；名字不是序号的就是线路里的位置 */
-    val epNumber: Int get() = epName?.takeIf { numericLine != false && Eps.isNumber(it, t.name) }
-        ?.let { Eps.key(it, t.name).toIntOrNull() } ?: ep
+    val epNumber: Int get() = nameNumber ?: ep
 
     /** 「第 3 集」或者「11.01 上」 */
     fun epText(name: String? = epName, idx: Int = epNumber) = Eps.text(name, idx, t.name, numericLine)
 
-    /** 当前线路的下一集，没有就是 null。按序号的线路找「第 n+1 集」，跳过夹在中间的花絮 */
-    val nextEpisode: Episode? get() {
+    /**
+     * 下一集的名字，没有就是 null。按序号的线路找「第 n+1 集」，按名字的是后面第一个正片（都跳过花絮、预告）。
+     * 当前线路没有（这个站缺这一集、还没更新）就到别的线路里找，播的时候自动换过去。
+     */
+    val nextName: String? get() {
+        val n = epName ?: return null
         val l = line ?: return null
-        val n = epName
-        if (numericLine == true && n != null && Eps.isNumber(n, t.name)) {
-            val next = (Eps.key(n, t.name).toIntOrNull() ?: return null) + 1
-            return l.episodes.firstOrNull { Eps.key(it.name, t.name) == next.toString() }
+        Eps.nextIndex(l.episodes, n, t.name, numericLine ?: true).takeIf { it >= 0 }?.let { return l.episodes[it].name }
+        for (o in Lines.ordered(set, l.key, emptyList())) {
+            if (o.key == l.key) continue
+            val i = Eps.nextIndex(o.episodes, n, t.name, Eps.numeric(o.episodes, t.name, t.isVariety))
+            if (i >= 0) return o.episodes[i].name
         }
-        return l.episodes.getOrNull(ep)
+        return null
     }
+
+    /** 「下一集 · 第 4 集」「下一集 · 03.17 上」 */
+    fun nextText(n: String) = Eps.text(n, Eps.number(n, t.name) ?: (epNumber + 1), t.name, numericLine)
 
     /**
      * 这一集在某条线路里是第几个（1 开始），找不到 = null。
@@ -180,12 +223,15 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
      * 按日期 / 期数分的线路找不到同名的就是没有，不按位置凑。
      */
     private fun indexIn(l: PlayLine): Int? {
-        val n = epName ?: return Eps.indexOfNumber(l.episodes, ep, t.name).takeIf { it >= 0 }?.plus(1)
-        val i = Eps.indexOf(l.episodes, n, t.name)
+        val eps = l.episodes
+        val n = epName ?: return Eps.indexOfNumber(eps, ep, t.name).takeIf { it >= 0 }?.plus(1)
+        // 选集行按名字点的、这个位置上正好是这个名字：直接用（同一条线路里有好几个「加更版」时，不能都放第一个）
+        if (eps.getOrNull(ep - 1)?.name == n) return ep
+        val i = Eps.indexOf(eps, n, t.name)
         if (i >= 0) return i + 1
-        if (!Eps.isNumber(n, t.name) || Eps.dated(l.episodes)) return null
-        val num = Eps.key(n, t.name).toIntOrNull() ?: return null
-        return Eps.indexOfNumber(l.episodes, num, t.name).takeIf { it >= 0 }?.plus(1)
+        val num = Eps.number(n, t.name) ?: return null
+        if (Eps.dated(eps, t.name)) return null
+        return Eps.indexOfNumber(eps, num, t.name).takeIf { it >= 0 }?.plus(1)
     }
 
     fun switchLine(l: PlayLine) {
@@ -199,18 +245,60 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     /** App 在后台（主页键、屏保）：正在找线路、解析的，加载好了也先别播 */
     private var hidden = false
 
-    /** 退到后台就暂停，不在后台出声 */
-    fun onHidden() { hidden = true; player.pause(); save() }
+    /**
+     * 退到后台：已经在播的停掉播放器（不在后台出声，也把硬件解码器让给别的 App），记下位置；
+     * 还在找线路、解析的，加载好了也先别播。
+     */
+    fun onHidden() {
+        hidden = true
+        save()
+        if (status == null && fail == null && line != null && ready == null && durMs > 0) {
+            resumeMs = player.currentPosition
+            player.pause()
+            player.stop()
+        } else player.pause()
+    }
     /** 回来了：停在暂停，按 OK 接着播 */
     fun onShown() { hidden = false }
 
-    fun togglePlay() { if (player.playWhenReady) player.pause() else player.play() }
+    /** 按了遥控器：连播计数清零 */
+    fun touch() { autoPlays = 0; lastTouch = System.currentTimeMillis() }
+
+    /** 「还在看吗」按了 OK */
+    fun keepWatching() { askContinue = false; touch(); playNext() }
+
+    fun togglePlay() {
+        if (player.playWhenReady) { player.pause(); return }
+        val l = line
+        // 退到后台停掉了、或者暂停超过 15 分钟（地址可能过期）：在这条线路、这个位置重新解析，不行再换线
+        if (l != null && fail == null && status == null &&
+            (player.playbackState == Player.STATE_IDLE || pausedAt > 0 && System.currentTimeMillis() - pausedAt > 15 * 60_000)
+        ) {
+            val pos = if (resumeMs >= 0) resumeMs else player.currentPosition.coerceAtLeast(0)
+            tried.clear()
+            start(ep, pos, l.key, first = l)
+            return
+        }
+        player.play()
+    }
+
+    /** 播放不了的时候按 OK：从头再找一遍（断网恢复后、或者线路刚好在抽风） */
+    fun retry() {
+        if (fail == null) return
+        if (set.done && set.lines.isEmpty()) set = Lines.find(ctx, t, force = true)
+        tried.clear()
+        start(ep, posMs.coerceAtLeast(0), line?.key)
+    }
     fun seekBy(sec: Int) { player.seekTo((player.currentPosition + sec * 1000L).coerceIn(0, durMs.takeIf { it > 0 } ?: Long.MAX_VALUE)); posMs = player.currentPosition }
     fun setRate(r: Float) { speed = r; player.setPlaybackSpeed(r) }
 
     fun save() {
         if (line == null || durMs <= 0) return
-        Store.progress[t.id] = Progress(t.id, epNumber, (posMs / 1000).toInt(), (durMs / 1000).toInt(), System.currentTimeMillis(), line?.key, pinned, epName)
+        val num = nameNumber
+        Store.progress[t.id] = Progress(
+            t.id, num ?: ep, (posMs / 1000).toInt(), (durMs / 1000).toInt(), System.currentTimeMillis(), line?.key, pinned, epName,
+            named = num == null && epName != null, nextName = nextName,
+        )
     }
 
     fun release() {
@@ -221,11 +309,13 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
 
     private fun onEnded() {
         save()
-        val next = nextEpisode
-        if (t.isEpisodic && next != null) {
-            notice = "自动播放" + epText(next.name, epNumber + 1).let { if (it.startsWith("第")) it else " $it" }
-            playNext()
-        }
+        val next = nextName
+        if (!t.isEpisodic || next == null) return
+        // 连着自动放了 3 集、或者 2 个半小时没按过遥控器（人睡着了、电视关了盒子没关）：停下来问一句
+        if (autoPlays >= 3 || System.currentTimeMillis() - lastTouch > 150 * 60_000) { askContinue = true; return }
+        autoPlays++
+        notice = "自动播放" + nextText(next).let { if (it.startsWith("第")) it else " $it" }
+        playNext()
     }
 
     private fun failover(why: String) {
@@ -242,7 +332,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         start(ep, player.currentPosition.coerceAtLeast(0), null)
     }
 
-    private suspend fun run(startMs: Long, prefer: String?, only: PlayLine?) {
+    private suspend fun run(startMs: Long, prefer: String?, only: PlayLine?, first: PlayLine?) {
         val c = cfg ?: try {
             Sources.config().also { cfg = it }
         } catch (e: Throwable) {
@@ -253,9 +343,12 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         while (true) {
             // 线路是陆续搜到的：先等一会儿上次能播的那条（12 秒）、优先站点（15 秒，单站超时就是 15 秒）和直链（6 秒），
             // 别抓到第一条需要解析的就播
-            if (only == null && !set.done) {
+            if (only == null && first == null && !set.done) {
                 val age = System.currentTimeMillis() - t0
-                val waitPrev = prefer != null && set.lines.none { it.key == prefer } && age < 12_000
+                // 上次那个站已经搜完了（这次没搜到）、换了片源没有这个站、被屏蔽了：不用等
+                val prevSite = prefer?.substringBefore('|')
+                val waitPrev = prefer != null && set.lines.none { it.key == prefer } && age < 12_000 &&
+                    prevSite !in set.doneSites && prevSite !in Prefs.blocked && c.sites.any { it.key == prevSite }
                 val waitPreferred = Prefs.preferred.isNotEmpty() && age < 15_000 &&
                     set.lines.none { Prefs.rank(it.siteKey) != null && it.key !in tried } &&
                     Prefs.preferred.any { k -> k !in set.doneSites && c.sites.any { it.key == k } }
@@ -268,12 +361,14 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             }
             val cand = only?.takeIf { it.key !in tried }
                 ?: if (only != null) null
-                else Lines.ordered(set, prefer, c.flags, pinned).firstOrNull { it.key !in tried && indexIn(it) != null }
+                else first?.takeIf { it.key !in tried && indexIn(it) != null }
+                    ?: Lines.ordered(set, prefer, c.flags, pinned).firstOrNull { it.key !in tried && indexIn(it) != null }
             if (cand == null) {
                 if (set.done || only != null) {
                     player.stop()
                     status = null
                     fail = when {
+                        set.lines.isEmpty() && !Lines.online(ctx) -> "网络断了。网络好了按 OK 重试"
                         set.lines.isEmpty() -> set.error ?: "「${Sources.name}」的 ${set.total} 个站点里都没找到《${t.name}》"
                         set.lines.none { indexIn(it) != null } -> "所有线路都还没有「${epText()}」"
                         else -> "${tried.size} 条线路都试过了，都播不了"
@@ -293,8 +388,18 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
                 return
             }
             ep = i
-            epName = cand.episodes[i - 1].name
+            // 按名字 / 集数认出来的才改成这条线路里的名字；按位置凑的（线路里的名字认不出数字）只拿来播，不改这一集是谁
+            val found = cand.episodes[i - 1].name
+            if (epName.let { it == null || Eps.same(found, it, t.name) || Eps.number(found, t.name)?.let { n -> n == Eps.number(it, t.name) } == true }) epName = found
             if (tryLine(c, cand, cand.episodes[i - 1], startMs)) return
+            // 断网了不是线路的错：不记失败，也别一条条换下去
+            if (!Lines.online(ctx)) {
+                set.failed.remove(cand.key)
+                player.stop()
+                status = null
+                fail = "网络断了。网络好了按 OK 重试"
+                return
+            }
             if (!Prefs.autoLine && only == null && tried.size >= 1) {
                 fail = "${cand.siteName} · ${cand.flag} 播不了（${set.failed[cand.key]}）。按右键换一条线路"
                 status = null

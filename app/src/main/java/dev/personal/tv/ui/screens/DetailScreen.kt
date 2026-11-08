@@ -1,5 +1,7 @@
 package dev.personal.tv.ui.screens
 
+import dev.personal.tv.data.Resume
+import dev.personal.tv.data.Target
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -62,7 +64,6 @@ import dev.personal.tv.data.SimilarSource
 import dev.personal.tv.data.Store
 import dev.personal.tv.data.Title
 import dev.personal.tv.data.Heat
-import dev.personal.tv.source.Episode
 import dev.personal.tv.source.Eps
 import dev.personal.tv.source.Lines
 import dev.personal.tv.source.PlayLine
@@ -124,6 +125,12 @@ fun DetailScreen(r: Route.Detail) {
     val epReq = remember { FocusRequester() }
     val simReq = remember { FocusRequester() }
     var inSec2 by remember { mutableStateOf(false) }
+    // 选集按哪条线路显示：线路是陆续搜到的，焦点在选集行里时先不换，免得按钮在手底下变了
+    val live = Lines.ref(Lines.get(t.id), p?.line)
+    var frozen by remember { mutableStateOf<PlayLine?>(null) }
+    var epFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(live, epFocus) { if (!epFocus || frozen == null) frozen = live }
+    val ref = if (epFocus) frozen ?: live else live
 
     BackHandler(enabled = inSec2) { runCatching { playReq.requestFocus() } }
 
@@ -178,10 +185,10 @@ fun DetailScreen(r: Route.Detail) {
                             }
                         }
                         T(t.desc.ifEmpty { if (t.full) "" else "正在从豆瓣取简介…" }, 11.5.sp, Palette.T2, lines = 2, lineHeight = 19.sp, modifier = Modifier.padding(top = 8.dp).width(500.dp))
-                        Buttons(t, p, mem, r, playReq, epReq, simReq, Modifier.padding(top = 14.dp))
+                        Buttons(t, p, ref, mem, r, playReq, epReq, simReq, Modifier.padding(top = 14.dp))
                     }
-                    if (t.isEpisodic && maxOf(t.totalEps, t.airedEps) > 1) {
-                        EpisodeRow(t, p, Lines.ref(Lines.get(t.id), p?.line), epReq, mem, Modifier.padding(top = 395.dp)) { ep, name -> nav.play(t.id, ep, name) }
+                    if (hasEpisodes(t, ref)) {
+                        EpisodeRow(t, p, ref, epReq, mem, Modifier.padding(top = 395.dp).onFocusChanged { epFocus = it.hasFocus }) { ep, name -> nav.play(t.id, ep, name) }
                     }
                     Row(
                         Modifier.align(Alignment.BottomStart).padding(start = Dimens.SafeH, bottom = 18.dp),
@@ -264,7 +271,7 @@ private fun DoubanBox(t: Title, modifier: Modifier) {
 
 @Composable
 private fun Buttons(
-    t: Title, p: Progress?, mem: FocusMemory, r: Route.Detail,
+    t: Title, p: Progress?, ref: PlayLine?, mem: FocusMemory, r: Route.Detail,
     playReq: FocusRequester, epReq: FocusRequester, simReq: FocusRequester, modifier: Modifier,
 ) {
     val nav = LocalNav.current
@@ -272,18 +279,20 @@ private fun Buttons(
     val set = Lines.get(t.id)
     val n = set?.lines?.size ?: 0
     val searching = set == null || !set.done
-    // 综艺这类按名字分期的，按线路里的名字算下一集
-    val named = Lines.ref(set, p?.line)?.episodes?.takeIf { it.isNotEmpty() && !Eps.numeric(it, t.name, t.isVariety) }
-    val ep = if (named != null) namedNext(t, p, named) else p?.let { nextEpisode(t, it) } ?: 1
-    val epName = named?.getOrNull(ep - 1)?.name ?: p?.epName?.takeIf { ep == p.ep }
-    val epLabel = if (named != null) Eps.label(named[ep - 1].name, t.name) else "第 $ep 集"
+    // 首页「继续观看」和这里用同一套算法（Resume.target）；没看过的从第一集（按名字的线路是第一个）开始
+    val firstName = ref?.episodes?.takeIf { it.isNotEmpty() && !Eps.numeric(it, t.name, t.isVariety) }?.first()?.name
+    val tg = if (p == null) Target(1, firstName, false) else Resume.target(t, p, ref?.episodes)
+    val ep = tg?.ep ?: p!!.ep
+    val epName = if (tg != null) tg.name else p!!.epName
+    val epLabel = tg?.text(t) ?: p!!.epText(t.name)
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         val (label, small) = when {
             dev.personal.tv.source.Sources.empty -> "先添加片源" to null
             n == 0 && searching -> "正在找线路" to set?.let { if (it.total > 0) "${it.searched}/${it.total}" else null }
             n == 0 -> "暂无线路" to null
             p == null -> (if (t.isEpisodic) "播放 $epLabel" else "播放") to null
-            ep != p.ep -> "播放 $epLabel" to "新"
+            tg == null -> (if (t.isEpisodic) "重看 $epLabel" else "重看") to null
+            !tg.resume -> "播放 $epLabel" to "新"
             t.isEpisodic -> "继续播放 $epLabel" to fmtTime(p.positionSec)
             else -> "继续播放" to fmtTime(p.positionSec)
         }
@@ -312,7 +321,7 @@ private fun Buttons(
                 T(dev.personal.tv.source.Sources.name, 10.sp, fg.copy(alpha = 0.6f))
             }
         }
-        if (p != null && t.isEpisodic && maxOf(t.totalEps, t.airedEps) > 1) {
+        if (p != null && hasEpisodes(t, ref)) {
             PillButton({ runCatching { epReq.requestFocus() } }, Modifier.remembered(mem, "eps")) { fg ->
                 Icon(Icons.AutoMirrored.Filled.List, null, Modifier.size(14.dp), tint = fg)
                 T("选集", 13.sp, fg, FontWeight.SemiBold)
@@ -347,15 +356,23 @@ fun EpisodeRow(
     t: Title, p: Progress?, line: PlayLine?, curReq: FocusRequester, mem: FocusMemory?,
     modifier: Modifier = Modifier, onPlay: (Int, String?) -> Unit,
 ) {
-    val named = line?.episodes?.takeIf { it.isNotEmpty() && !Eps.numeric(it, t.name, t.isVariety) }
-    if (named != null) return NamedEpisodeRow(t, p, named, curReq, mem, modifier, onPlay)
-    val cur = p?.let { nextEpisode(t, it) } ?: 1
+    if (line != null && line.episodes.isNotEmpty() && !Eps.numeric(line.episodes, t.name, t.isVariety)) return NamedEpisodeRow(t, p, line, curReq, mem, modifier, onPlay)
+    // 线路里的集数比豆瓣多（第二季接着第一季编号、豆瓣还没更新）：按线路的来
+    val lineMax = line?.episodes?.maxOfOrNull { Eps.number(it.name, t.name) ?: 0 } ?: 0
+    val aired = maxOf(t.airedEps, lineMax)
+    val total = maxOf(t.totalEps, aired)
+    // 上次看到第几集（名字里的数字；按名字分期的记录没有）
+    val no = p?.episodeNo(t.name)
+    val cur = p?.let { pr ->
+        val tg = Resume.target(t, pr, line?.episodes)
+        tg?.name?.let { Eps.number(it, t.name) } ?: tg?.ep?.takeIf { tg.name == null } ?: no
+    } ?: 1
     val state = rememberLazyListState(initialFirstVisibleItemIndex = (cur - 5).coerceAtLeast(0))
     Column(modifier) {
         Row(Modifier.padding(start = Dimens.SafeH, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             T("选集", 13.sp, weight = FontWeight.SemiBold)
-            T("1–${maxOf(t.totalEps, t.airedEps)}", 9.5.sp, Palette.T1, modifier = Modifier.background(Color.White.copy(alpha = 0.14f), RoundedCornerShape(50)).padding(horizontal = 7.dp, vertical = 2.dp))
-            t.schedule?.let { T("$it · 已更新至 ${t.airedEps} 集", 9.5.sp, Palette.T3) }
+            T("1–$total", 9.5.sp, Palette.T1, modifier = Modifier.background(Color.White.copy(alpha = 0.14f), RoundedCornerShape(50)).padding(horizontal = 7.dp, vertical = 2.dp))
+            t.schedule?.let { T("$it · 已更新至 $aired 集", 9.5.sp, Palette.T3) }
         }
         EdgeScroll {
             LazyRow(
@@ -363,11 +380,11 @@ fun EpisodeRow(
                 contentPadding = PaddingValues(horizontal = Dimens.SafeH, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
-                items((1..maxOf(t.totalEps, t.airedEps)).toList(), key = { it }) { ep ->
-                    val locked = ep > t.airedEps
-                    val seen = p != null && (ep < p.ep || (ep == p.ep && p.finishedEp))
-                    val isCur = p != null && ep == p.ep && !p.finishedEp
-                    val isNew = ep == t.airedEps && t.airedEps < t.totalEps && (p == null || ep > p.ep)
+                items((1..total).toList(), key = { it }) { ep ->
+                    val locked = ep > aired
+                    val seen = no != null && (ep < no || (ep == no && p!!.finishedEp))
+                    val isCur = no != null && ep == no && !p!!.finishedEp
+                    val isNew = ep == aired && aired < total && (no == null || ep > no)
                     if (locked) {
                         Box(Modifier.size(54.dp, 34.dp).dashedBorder(Color.White.copy(alpha = 0.12f), 6.dp), contentAlignment = Alignment.Center) {
                             T("$ep", 10.sp, Palette.T3)
@@ -391,11 +408,15 @@ fun EpisodeRow(
 /** 按线路里的分集名字排（综艺）：按钮宽度跟着名字走，聚焦时标题旁边显示完整名字 */
 @Composable
 private fun NamedEpisodeRow(
-    t: Title, p: Progress?, eps: List<Episode>, curReq: FocusRequester, mem: FocusMemory?,
+    t: Title, p: Progress?, line: PlayLine, curReq: FocusRequester, mem: FocusMemory?,
     modifier: Modifier, onPlay: (Int, String?) -> Unit,
 ) {
-    val watched = namedWatched(t, p, eps)
-    val cur = namedNext(t, p, eps)
+    val eps = line.episodes
+    val w = namedWatched(t, p, line)
+    val watched = w?.plus(1)
+    val cur = if (w == null) 1 else if (p!!.finishedEp) (Eps.nextAfter(eps, w, t.name).takeIf { it >= 0 } ?: w) + 1 else w + 1
+    // 同名的分集（每周都叫「加更版」）：焦点记忆按「名字 + 第几个同名的」记
+    val occ = remember(eps) { val seen = HashMap<String, Int>(); eps.map { e -> seen.merge(e.name, 1, Int::plus)!! } }
     var focusedName by remember { mutableStateOf<String?>(null) }
     val state = rememberLazyListState(initialFirstVisibleItemIndex = (cur - 4).coerceAtLeast(0))
     Column(modifier) {
@@ -416,7 +437,7 @@ private fun NamedEpisodeRow(
                     val isCur = watched != null && ep == watched && !p!!.finishedEp
                     var m: Modifier = Modifier
                     if (ep == cur) m = m.focusRequester(curReq)
-                    if (mem != null) m = m.remembered(mem, "ep:$ep")
+                    if (mem != null) m = m.remembered(mem, "ep:${e.name}#${occ[i]}")
                     Focusable({ onPlay(ep, e.name) }, m, corner = 6.dp, onFocus = { focusedName = e.name.trim() }) { f ->
                         EpChip(
                             f, seen, isCur, false, p,
@@ -431,16 +452,23 @@ private fun NamedEpisodeRow(
     }
 }
 
-/** 上次看的那一期在这条线路里是第几个（1 开始）；名字对不上就按序号 */
-private fun namedWatched(t: Title, p: Progress?, eps: List<Episode>): Int? = p?.let { pr ->
-    pr.epName?.let { Eps.indexOf(eps, it, t.name) + 1 }?.takeIf { it > 0 } ?: pr.ep.takeIf { it in 1..eps.size }
+/**
+ * 上次看的那一期在这条线路里是第几个（0 开始），认不出 = null。
+ * 先看上次那个位置上是不是正好这个名字（同名的加更版不能都认成第一个），再按名字找；
+ * 按位置凑只在同一条线路、而且记录的就是位置时用。
+ */
+private fun namedWatched(t: Title, p: Progress?, line: PlayLine): Int? {
+    val pr = p ?: return null
+    val eps = line.episodes
+    val sameLine = pr.line == line.key && pr.isNamed(t.name)
+    if (sameLine && pr.epName != null && eps.getOrNull(pr.ep - 1)?.name == pr.epName) return pr.ep - 1
+    pr.epName?.let { Eps.indexOf(eps, it, t.name) }?.takeIf { it >= 0 }?.let { return it }
+    return if (sameLine && pr.ep in 1..eps.size) pr.ep - 1 else null
 }
 
-/** 接下来该播第几个：看完了就下一个，否则接着看 */
-private fun namedNext(t: Title, p: Progress?, eps: List<Episode>): Int {
-    val w = namedWatched(t, p, eps) ?: return 1
-    return if (p!!.finishedEp && w < eps.size) w + 1 else w
-}
+/** 有没有选集行：豆瓣说不止一集，或者线路里不止一集（豆瓣没写集数的综艺） */
+private fun hasEpisodes(t: Title, ref: PlayLine?) =
+    t.isEpisodic && (maxOf(t.totalEps, t.airedEps) > 1 || (ref?.episodes?.size ?: 0) > 1)
 
 @Composable
 private fun EpChip(f: Boolean, seen: Boolean, isCur: Boolean, isNew: Boolean, p: Progress?, modifier: Modifier, label: @Composable () -> Unit) {

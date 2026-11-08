@@ -64,10 +64,15 @@ object Douban {
         return fetch(full.toString(), if (ttl > 0) f else null)
     }
 
+    /** 豆瓣返回 403 / 429（请求太多被限了）后先停 2 分钟，这期间有缓存用缓存，别越搜越被封 */
+    @Volatile private var blockedUntil = 0L
+
     private fun fetch(url: String, f: File?): JsonElement {
+        if (System.currentTimeMillis() < blockedUntil) error("豆瓣请求太多，歇一会儿")
         val req = Request.Builder().url(url).header("User-Agent", UA).header("Referer", REFERER).build()
         client.newCall(req).execute().use { r ->
             val body = r.body?.string().orEmpty()
+            if (r.code == 403 || r.code == 429) blockedUntil = System.currentTimeMillis() + 2 * 60_000
             if (!r.isSuccessful) error("豆瓣 HTTP ${r.code}")
             val json = JsonParser.parseString(body)
             if (f != null) runCatching {

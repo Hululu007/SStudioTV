@@ -1,5 +1,8 @@
 package dev.personal.tv.ui.screens
 
+import dev.personal.tv.data.Resume
+import dev.personal.tv.data.Target
+import dev.personal.tv.source.Lines
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -99,7 +102,7 @@ fun HomeScreen(mem: FocusMemory) {
 
     Box(Modifier.fillMaxSize()) {
         Crossfade(backdrop, animationSpec = tween(400), label = "backdrop") { a ->
-            if (a != null) Backdrop(a, Modifier.offset(x = 260.dp).size(700.dp, 410.dp), alignment = Alignment.Center)
+            if (a != null) Backdrop(a, Modifier.fillMaxSize().padding(start = 260.dp, bottom = 130.dp), alignment = Alignment.Center)
         }
         Box(Modifier.fillMaxSize().drawBehind { drawHomeScrims() })
 
@@ -252,8 +255,12 @@ private fun HeroInfo(t: Title, p: Progress?, hotRank: Int) {
         }
         Row(Modifier.padding(top = 15.dp), horizontalArrangement = Arrangement.spacedBy(15.dp)) {
             if (p != null) {
-                val next = nextEpisode(t, p)
-                Hint("OK", if (next != p.ep) (if (p.epText(t.name).startsWith("第")) "播放第 $next 集" else "播放下一集") else "从 ${fmtTime(p.positionSec)} 继续")
+                val tg = resumeTarget(t, p)
+                Hint("OK", when {
+                    tg == null -> "看完了 · 打开详情看更新"
+                    tg.resume -> "从 ${fmtTime(p.positionSec)} 继续"
+                    else -> "播放 " + tg.text(t)
+                })
                 Hint("☰", "详情 · 找类似 · 移出列表")
             } else {
                 Hint("OK", "打开详情")
@@ -263,21 +270,16 @@ private fun HeroInfo(t: Title, p: Progress?, hotRank: Int) {
     }
 }
 
-/** 看完了这一集就播下一集，否则接着这一集 */
-internal fun nextEpisode(t: Title, p: Progress): Int {
-    if (!t.isEpisodic || !p.finishedEp) return p.ep
-    // 综艺按名字分期：序号是线路里的，跟豆瓣的集数对不上，看线路里还有没有下一个
-    val named = p.epName != null && !dev.personal.tv.source.Eps.isNumber(p.epName, t.name)
-    val last = if (named) dev.personal.tv.source.Lines.ref(dev.personal.tv.source.Lines.get(t.id), p.line)?.episodes?.size ?: p.ep else t.airedEps
-    return if (p.ep < last) p.ep + 1 else p.ep
-}
+/** 看完了这一集就播下一集，否则接着这一集；线路搜过就按线路里的名字找下一集 */
+internal fun resumeTarget(t: Title, p: Progress): Target? =
+    Resume.target(t, p, Lines.ref(Lines.get(t.id), p.line)?.episodes)
 
 @Composable
 private fun ContinueCard(t: Title, p: Progress, modifier: Modifier, onFocus: () -> Unit) {
     val nav = LocalNav.current
     val newEps = Store.newEpisodes(t, p)
     Focusable(
-        onClick = { nextEpisode(t, p).let { n -> nav.play(t.id, n, p.epName.takeIf { n == p.ep }) } },
+        onClick = { resumeTarget(t, p)?.let { nav.play(t.id, it.ep, it.name) } ?: nav.openDetail(t.id) },
         modifier = modifier.size(220.dp, 124.dp),
         onFocus = onFocus,
         onMenu = {
