@@ -70,6 +70,7 @@ import dev.personal.tv.source.Net
 import dev.personal.tv.source.Sources
 import dev.personal.tv.ui.LocalNav
 import dev.personal.tv.ui.Route
+import dev.personal.tv.ui.components.OnAppHidden
 import dev.personal.tv.ui.components.Chip
 import dev.personal.tv.ui.components.FocusMemory
 import dev.personal.tv.ui.components.Focusable
@@ -260,6 +261,8 @@ fun LivePlayer(r: Route.LivePlay) {
         tune()
         onDispose { player.removeListener(l); player.release() }
     }
+    // 按主页键、进屏保：直播停掉（不在后台出声、不白跑流量），回来重新连当前台
+    OnAppHidden(onHide = { player.stop() }, onShow = { tune() })
     LaunchedEffect(Unit) { delay(50); runCatching { focus.requestFocus() } }
     LaunchedEffect(banner) { showBanner = true; delay(4000); showBanner = false }
     BackHandler(enabled = overlay) { overlay = false; runCatching { focus.requestFocus() } }
@@ -288,6 +291,7 @@ fun LivePlayer(r: Route.LivePlay) {
                     layoutParams = ViewGroup.LayoutParams(-1, -1)
                     this.player = player
                     isFocusable = false
+                    keepScreenOn = true
                 }
             },
             modifier = Modifier.fillMaxSize(),

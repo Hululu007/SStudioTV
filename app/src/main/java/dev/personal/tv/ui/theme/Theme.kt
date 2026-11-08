@@ -7,7 +7,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.LocalContentColor
@@ -46,7 +51,7 @@ val Serif = FontFamily.Serif
 val EaseOut = CubicBezierEasing(0.2f, 0.8f, 0.2f, 1f)
 
 @Composable
-fun AppTheme(content: @Composable () -> Unit) {
+fun AppTheme(content: @Composable () -> Unit) = TvScale {
     MaterialTheme(
         colorScheme = darkColorScheme(
             background = Palette.Bg,
@@ -59,4 +64,22 @@ fun AppTheme(content: @Composable () -> Unit) {
             Box(Modifier.fillMaxSize().background(Palette.Bg)) { content() }
         }
     }
+}
+
+/**
+ * 界面都按 960×540 dp 排（1080p 电视的标准密度 xhdpi）。有的电视报的密度偏低（实测一台 4K 电视是 1280×720 dp），
+ * 按真实 dp 画出来整体缩小一圈、首页背景图盖不满，所以按屏幕大小把 dp 换算成 960×540 的比例。
+ * 弹窗（Dialog）是新窗口，会重置密度，里面也要包一层。
+ */
+@Composable
+fun TvScale(content: @Composable () -> Unit) {
+    val conf = LocalConfiguration.current
+    val real = LocalContext.current.resources.displayMetrics.density
+    val font = LocalDensity.current.fontScale
+    val d = remember(conf.screenWidthDp, conf.screenHeightDp, real, font) {
+        val w = conf.screenWidthDp * real
+        val h = conf.screenHeightDp * real
+        if (w <= 0f || h <= 0f) Density(real, font) else Density(minOf(w / 960f, h / 540f), font)
+    }
+    CompositionLocalProvider(LocalDensity provides d, content = content)
 }

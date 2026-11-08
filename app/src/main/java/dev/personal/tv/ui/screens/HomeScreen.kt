@@ -225,7 +225,7 @@ private fun HeroInfo(t: Title, p: Progress?, hotRank: Int) {
             Spacer(Modifier.width(6.dp))
             val eyebrow = when {
                 p != null && Store.newEpisodes(t, p) > 0 -> "有更新 · 你看完了第 ${p.ep} 集，已更新至 ${t.airedEps} 集"
-                p != null && t.isEpisodic -> "继续观看 · 第 ${p.ep} 集 · 剩余 ${p.remainingMin} 分钟"
+                p != null && t.isEpisodic -> "继续观看 · ${p.epText(t.name)} · 剩余 ${p.remainingMin} 分钟"
                 p != null -> "继续观看 · 电影 · 剩余 ${p.remainingMin} 分钟"
                 hotRank >= 0 -> "豆瓣 · 最近热门" + if (t.ratingCount > 0) " · ${fmtWan(t.ratingCount)}人评价" else ""
                 else -> t.kind.label
@@ -253,7 +253,7 @@ private fun HeroInfo(t: Title, p: Progress?, hotRank: Int) {
         Row(Modifier.padding(top = 15.dp), horizontalArrangement = Arrangement.spacedBy(15.dp)) {
             if (p != null) {
                 val next = nextEpisode(t, p)
-                Hint("OK", if (next != p.ep) "播放第 $next 集" else "从 ${fmtTime(p.positionSec)} 继续")
+                Hint("OK", if (next != p.ep) (if (p.epText(t.name).startsWith("第")) "播放第 $next 集" else "播放下一集") else "从 ${fmtTime(p.positionSec)} 继续")
                 Hint("☰", "详情 · 找类似 · 移出列表")
             } else {
                 Hint("OK", "打开详情")
@@ -264,15 +264,20 @@ private fun HeroInfo(t: Title, p: Progress?, hotRank: Int) {
 }
 
 /** 看完了这一集就播下一集，否则接着这一集 */
-internal fun nextEpisode(t: Title, p: Progress): Int =
-    if (t.isEpisodic && p.finishedEp && p.ep < t.airedEps) p.ep + 1 else p.ep
+internal fun nextEpisode(t: Title, p: Progress): Int {
+    if (!t.isEpisodic || !p.finishedEp) return p.ep
+    // 综艺按名字分期：序号是线路里的，跟豆瓣的集数对不上，看线路里还有没有下一个
+    val named = p.epName != null && !dev.personal.tv.source.Eps.isNumber(p.epName, t.name)
+    val last = if (named) dev.personal.tv.source.Lines.ref(dev.personal.tv.source.Lines.get(t.id), p.line)?.episodes?.size ?: p.ep else t.airedEps
+    return if (p.ep < last) p.ep + 1 else p.ep
+}
 
 @Composable
 private fun ContinueCard(t: Title, p: Progress, modifier: Modifier, onFocus: () -> Unit) {
     val nav = LocalNav.current
     val newEps = Store.newEpisodes(t, p)
     Focusable(
-        onClick = { nav.play(t.id, nextEpisode(t, p)) },
+        onClick = { nextEpisode(t, p).let { n -> nav.play(t.id, n, p.epName.takeIf { n == p.ep }) } },
         modifier = modifier.size(220.dp, 124.dp),
         onFocus = onFocus,
         onMenu = {
@@ -295,7 +300,7 @@ private fun ContinueCard(t: Title, p: Progress, modifier: Modifier, onFocus: () 
             T(t.name, 12.5.sp, weight = FontWeight.SemiBold)
             val sub = when {
                 newEps > 0 -> "看完第 ${p.ep} 集 · 已更新至 ${t.airedEps} 集"
-                t.isEpisodic -> "第 ${p.ep} 集 · 剩余 ${p.remainingMin} 分钟"
+                t.isEpisodic -> "${p.epText(t.name)} · 剩余 ${p.remainingMin} 分钟"
                 else -> "电影 · 剩余 ${p.remainingMin} 分钟"
             }
             T(sub, 9.5.sp, Palette.T2)

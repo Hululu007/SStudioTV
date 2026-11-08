@@ -73,6 +73,8 @@ import dev.personal.tv.ui.components.Hint
 import dev.personal.tv.ui.components.T
 import dev.personal.tv.ui.components.Toggle
 import dev.personal.tv.ui.components.Backdrop
+import dev.personal.tv.ui.components.OnAppHidden
+import dev.personal.tv.source.Eps
 import dev.personal.tv.source.Lines
 import dev.personal.tv.source.PlayLine
 import dev.personal.tv.source.Sources
@@ -115,7 +117,7 @@ fun PlayerScreen(r: Route.Player) {
     val ctx = LocalContext.current
     val t = Catalog.get(r.id) ?: return
     val scope = rememberCoroutineScope()
-    val ps = remember { PlaySession(ctx, t, r.ep, scope) }
+    val ps = remember { PlaySession(ctx, t, r.ep, r.epName, scope) }
     DisposableEffect(Unit) { onDispose { ps.release() } }
 
     var controls by remember { mutableStateOf(false) }
@@ -132,6 +134,8 @@ fun PlayerScreen(r: Route.Player) {
     val barReq = remember { FocusRequester() }
     val epReq = remember { FocusRequester() }
 
+    // 按主页键、进屏保：暂停（不然在后台接着出声）；回来时停在暂停、把控制条亮出来
+    OnAppHidden(onHide = { ps.onHidden() }, onShow = { ps.onShown(); controls = true })
     LaunchedEffect(ps.notice) { ps.notice?.let { nav.toast(it); ps.notice = null } }
     LaunchedEffect(controls, lastInput, sheet, strip) {
         if (controls && !sheet && !strip) { delay(5000); controls = false }
@@ -171,6 +175,8 @@ fun PlayerScreen(r: Route.Player) {
                     setKeepContentOnPlayerReset(false)
                 }
             },
+            // 播放（含缓冲）时不让电视进屏保；暂停了就随它
+            update = { it.keepScreenOn = ps.playing },
             modifier = Modifier.fillMaxSize(),
         )
         // 还没出画面时：模糊海报 + 提示
@@ -230,15 +236,15 @@ fun PlayerScreen(r: Route.Player) {
                 Column(Modifier.padding(start = Dimens.SafeH, top = Dimens.SafeV)) {
                     T(t.name, 17.sp, weight = FontWeight.Bold)
                     val where = ps.line?.let { "${it.siteName} · ${it.flag}" } ?: "还没有线路"
-                    T((if (t.isEpisodic) "第 ${ps.ep} 集 · " else "") + where, 11.sp, Palette.T2, modifier = Modifier.padding(top = 2.dp))
+                    T((if (t.isEpisodic) ps.epText() + " · " else "") + where, 11.sp, Palette.T2, modifier = Modifier.padding(top = 2.dp))
                 }
                 Column(
                     Modifier.align(Alignment.BottomStart).fillMaxWidth()
                         .padding(start = Dimens.SafeH, end = Dimens.SafeH, bottom = Dimens.SafeV),
                 ) {
                     if (strip) {
-                        EpisodeRow(t, Progress(t.id, ps.ep, pos, dur, 0), epReq, null, Modifier.offset(x = -Dimens.SafeH).padding(bottom = 8.dp)) { e ->
-                            ps.playEpisode(e); strip = false
+                        EpisodeRow(t, Progress(t.id, ps.epNumber, pos, dur, 0, epName = ps.epName), ps.line, epReq, null, Modifier.offset(x = -Dimens.SafeH).padding(bottom = 8.dp)) { e, name ->
+                            ps.playEpisode(e, name); strip = false
                         }
                     }
                     Row(Modifier.fillMaxWidth().padding(bottom = 7.dp)) {
@@ -250,7 +256,7 @@ fun PlayerScreen(r: Route.Player) {
                     ControlButtons(
                         t, ps, playReq,
                         onEpisodes = { strip = true },
-                        onNext = { ps.playEpisode(ps.ep + 1) },
+                        onNext = { ps.playNext() },
                     )
                 }
             }
@@ -328,7 +334,7 @@ private fun ControlButtons(
             nav.toast(if (PlayerPrefs.nightVolume) "夜间音量已开：压低爆炸声，对白听得清" else "夜间音量已关")
         }
         Spacer(Modifier.weight(1f))
-        if (t.isEpisodic && ps.ep < ps.episodeCount) CtlChip("下一集 · 第 ${ps.ep + 1} 集") { onNext() }
+        ps.nextEpisode?.let { n -> if (t.isEpisodic) CtlChip("下一集 · " + ps.epText(n.name, ps.epNumber + 1)) { onNext() } }
     }
 }
 
@@ -396,7 +402,7 @@ private fun LineSheet(ps: PlaySession, pos: Int, onClose: () -> Unit, onPick: (P
                         val m = if (l == lines.first()) Modifier.focusRequester(first) else Modifier
                         val kind = if (l.direct) "直链" else "需解析"
                         SheetRow(
-                            "${l.siteName} · ${l.flag}", bad ?: "${l.episodes.size} 集 · $kind" + if (l.remarks.isNotBlank()) " · ${l.remarks.take(14)}" else "",
+                            "${l.siteName} · ${l.flag}", bad ?: "${l.episodes.size} ${if (Eps.numeric(l.episodes, ps.t.name, ps.t.isVariety)) "集" else "个"} · $kind" + if (l.remarks.isNotBlank()) " · ${l.remarks.take(14)}" else "",
                             m, dim = bad != null && !isCur,
                             tag = when { isCur -> "当前"; dev.personal.tv.data.Prefs.rank(l.siteKey) != null -> "优先"; else -> null },
                             onClick = { onPick(l) },

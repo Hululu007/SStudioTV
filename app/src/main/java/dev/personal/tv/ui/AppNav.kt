@@ -55,6 +55,7 @@ import dev.personal.tv.ui.screens.LabPlayer
 import dev.personal.tv.ui.screens.LivePlayer
 import dev.personal.tv.ui.screens.SourcesScreen
 import dev.personal.tv.ui.theme.Palette
+import dev.personal.tv.ui.theme.TvScale
 import kotlinx.coroutines.delay
 
 enum class Tab(val label: String) { HOME("首页"), FIND("找片"), WISH("想看"), LIVE("直播") }
@@ -63,7 +64,7 @@ sealed class Route(val key: String) {
     data object Main : Route("main")
     data object Search : Route("search")
     class Detail(val id: String, val similar: Boolean, n: Int) : Route("detail:$id:$n")
-    class Player(val id: String, val ep: Int, val openLines: Boolean, n: Int) : Route("player:$id:$n")
+    class Player(val id: String, val ep: Int, val epName: String?, val openLines: Boolean, n: Int) : Route("player:$id:$n")
     data object Lab : Route("lab")
     data object Settings : Route("settings")
     data object Sources : Route("sources")
@@ -102,7 +103,7 @@ class Navigator {
     }
 
     fun openDetail(id: String, similar: Boolean = false) = push(Route.Detail(id, similar, ++seq))
-    fun play(id: String, ep: Int, openLines: Boolean = false) = push(Route.Player(id, ep, openLines, ++seq))
+    fun play(id: String, ep: Int, epName: String? = null, openLines: Boolean = false) = push(Route.Player(id, ep, epName, openLines, ++seq))
     fun openSearch() = push(Route.Search)
     fun openLab() = push(Route.Lab)
     fun openSettings() = push(Route.Settings)
@@ -212,7 +213,7 @@ private fun ToastHost(nav: Navigator) {
 @Composable
 private fun ContextMenu(t: Title, items: List<MenuItem>, nav: Navigator) {
     val first = remember { FocusRequester() }
-    Dialog(onDismissRequest = nav::closeMenu, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = nav::closeMenu, properties = DialogProperties(usePlatformDefaultWidth = false)) { TvScale {
         Column(
             Modifier.width(260.dp).background(Palette.Panel, RoundedCornerShape(14.dp)).padding(horizontal = 16.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -235,6 +236,6 @@ private fun ContextMenu(t: Title, items: List<MenuItem>, nav: Navigator) {
                 }
             }
         }
-    }
+    } }
     LaunchedEffect(Unit) { delay(60); runCatching { first.requestFocus() } }
 }

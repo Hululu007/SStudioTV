@@ -14,6 +14,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -233,7 +235,7 @@ object Catalog {
     suspend fun search(q: String, remote: Boolean): List<Title> {
         val key = q.uppercase().replace(" ", "")
         val idx = withContext(Dispatchers.Default) { SearchIndex.search(q) }
-        val sug = if (remote) runCatching { withContext(Dispatchers.IO) { Douban.suggest(q) } }.getOrNull().orEmpty() else emptyList()
+        val sug = if (remote) remoteSearch(q) else emptyList()
         // 改表在主线程；匹配、排序（要算拼音首字母）放后台，几千部也不卡遥控器
         val all = withContext(Dispatchers.Main) {
             put(sug)
@@ -259,6 +261,21 @@ object Catalog {
                 .forEach { out.putIfAbsent(it.id, it) }
             out.values.filter { it.id !in hidden }.take(60)
         }
+    }
+
+    /**
+     * 输入法搜索：豆瓣联想 + 全站搜索 + 英文换个单复数再搜，一起拉，合起来按人数排。
+     * 联想带英文原名，搜索带类型和评分，同一部两边都有就拼起来。
+     */
+    private suspend fun remoteSearch(q: String): List<Title> = coroutineScope {
+        val jobs = listOf(async(Dispatchers.IO) { runCatching { Douban.suggest(q) }.getOrNull().orEmpty() }) +
+            (listOf(q) + SearchQuery.variants(q)).map { v -> async(Dispatchers.IO) { runCatching { Douban.search(v) }.getOrNull().orEmpty() } }
+        val byId = LinkedHashMap<String, Title>()
+        jobs.awaitAll().flatten().forEach { t ->
+            val o = byId[t.id]
+            byId[t.id] = if (o == null) t else t.copy(origName = t.origName.ifEmpty { o.origName }, poster = t.poster ?: o.poster)
+        }
+        SearchQuery.rank(byId.values.toList(), q)
     }
 
     private fun matches(t: Title, q: String, key: String) =
@@ -315,7 +332,8 @@ object Store {
 
     /** 看完了最新一集，但又出了新集：返回新出的集数 */
     fun newEpisodes(t: Title, p: Progress): Int =
-        if (t.isEpisodic && p.finishedEp && t.airedEps > p.ep) t.airedEps - p.ep else 0
+        // 综艺按名字分期（上下期、加更），序号和豆瓣的集数对不上，不算
+        if (t.isEpisodic && p.finishedEp && t.airedEps > p.ep && (p.epName == null || dev.personal.tv.source.Eps.isNumber(p.epName, t.name))) t.airedEps - p.ep else 0
 
     fun toggleWish(id: String) {
         if (id in wish) wish.remove(id) else wish.add(0, id)

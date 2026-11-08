@@ -37,6 +37,7 @@ data class Title(
     val full: Boolean = false,
 ) {
     val isEpisodic get() = dtype == "tv"
+    val isVariety get() = kind == Kind.VARIETY
     val scoreText get() = score?.let { "%.1f".format(it) }
     /** 没海报时用的渐变，按 id 固定，同一部片每次一样 */
     val art: ArtStyle get() = ArtStyle.entries[(id.hashCode() and 0x7fffffff) % ArtStyle.entries.size]
@@ -81,7 +82,12 @@ data class Progress(
     val line: String? = null,
     /** 这条线路是用户手动选的：下次排在「优先站点」前面 */
     val pinned: Boolean = false,
+    /** 这一集在线路里的名字（综艺换线路时按名字找同一期）；老记录没有 */
+    val epName: String? = null,
 ) {
+    /** 「第 3 集」或者「11.01 上」 */
+    fun epText(title: String) = dev.personal.tv.source.Eps.text(epName, ep, title)
+
     val fraction get() = if (durationSec == 0) 0f else positionSec.toFloat() / durationSec
     val finishedEp get() = durationSec > 0 && positionSec >= durationSec - 60
     val remainingMin get() = ((durationSec - positionSec) / 60).coerceAtLeast(1)

@@ -113,6 +113,15 @@ object Lines {
                 .thenByDescending { it.episodes.size },
         )
 
+    /**
+     * 选集按这条线路显示：分集最全的（综艺有的站有加更、上下期，有的站没有），一样多时上次播的那条优先。
+     * 播放时按名字到各条线路里找同一集，所以显示哪条都能播。
+     */
+    fun ref(set: LineSet?, lastKey: String?): PlayLine? {
+        if (set == null) return null
+        return ordered(set, lastKey, emptyList(), pinned = true).maxByOrNull { it.episodes.size }
+    }
+
     private suspend fun search(ctx: Context, t: Title, set: LineSet) {
         val t0 = System.currentTimeMillis()
         val cfg = try { Sources.config() } catch (e: Throwable) {
@@ -145,9 +154,10 @@ object Lines {
         Log.i(TAG, "${t.name} · ${set.lines.size} 条线路 · ${set.searched}/${set.total} 站 · ${System.currentTimeMillis() - t0}ms")
         if (t.isEpisodic && set.lines.isNotEmpty()) {
             // 豆瓣还没更新集数时按线路算；取第二多的，免得一个站把花絮也算进去
-            val counts = set.lines.map { it.episodes.size }.sortedDescending()
-            val eps = if (counts.size >= 2) counts[1] else counts[0]
-            if (t.totalEps <= 1 || eps <= t.totalEps) Catalog.bumpAired(t.id, eps)
+            // 综艺按名字分期（上下期、加更），条数不等于集数，不拿来算
+            val counts = set.lines.filter { Eps.numeric(it.episodes, t.name, t.isVariety) }.map { l -> l.episodes.count { Eps.isNumber(it.name, t.name) } }.sortedDescending()
+            val eps = if (counts.size >= 2) counts[1] else counts.firstOrNull() ?: 0
+            if (eps > 0 && (t.totalEps <= 1 || eps <= t.totalEps)) Catalog.bumpAired(t.id, eps)
         }
     }
 
@@ -170,7 +180,7 @@ object Lines {
                 // 电影只要一集的来源；剧集的来源只有一集多半是预告
                 if (!t.isEpisodic && f.episodes.size > 3) continue
                 if (t.isEpisodic && f.episodes.size == 1 && (t.totalEps > 1 || t.airedEps > 1)) continue
-                val line = PlayLine(s.key, s.name, f.name, v.name, v.remarks, f.episodes)
+                val line = PlayLine(s.key, s.name, f.name, v.name, v.remarks, Eps.ascending(f.episodes))
                 if (set.lines.none { it.key == line.key }) set.lines.add(line)
             }
         }

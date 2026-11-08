@@ -117,6 +117,41 @@ object Douban {
             )
         }
 
+    private val GENRES = setOf(
+        "剧情", "喜剧", "动作", "爱情", "科幻", "动画", "悬疑", "惊悚", "恐怖", "犯罪", "同性", "音乐", "歌舞", "传记", "历史", "战争",
+        "西部", "奇幻", "冒险", "灾难", "武侠", "情色", "纪录片", "短片", "家庭", "儿童", "古装", "运动", "黑色电影", "真人秀", "脱口秀", "戏曲",
+    )
+    private val PIC = Regex("/public/(p\\d+\\.\\w+)")
+
+    /**
+     * 全站搜索：中文、英文原名都认，比联想全（联想只给三五条，英文常常搜不到）。
+     * card_subtitle 是「地区 / 类型 / 导演 / 主演」，没类型的条目第二段是演员，按类型表过滤。
+     */
+    fun search(q: String): List<Title> =
+        get("$API/search/movie", mapOf("q" to q, "count" to "20"), ttl = DAY).asJsonObject.arr("items").mapNotNull { e ->
+            val o = e.obj() ?: return@mapNotNull null
+            val type = o.str("target_type")?.takeIf { it == "movie" || it == "tv" } ?: return@mapNotNull null
+            val t = o.obj("target") ?: return@mapNotNull null
+            val id = t.str("id") ?: return@mapNotNull null
+            val name = t.str("title")?.trim()?.replace(Regex("\\s+"), " ") ?: return@mapNotNull null
+            val parts = t.str("card_subtitle").orEmpty().split(" / ").map { it.trim() }
+            val genres = parts.getOrNull(1)?.split(" ")?.filter { it in GENRES }.orEmpty()
+            val rest = if (genres.isEmpty()) parts.drop(1) else parts.drop(2)
+            val rating = t.obj("rating")
+            val count = rating?.int("count") ?: 0
+            Title(
+                id = id, name = name, year = t.str("year")?.take(4)?.toIntOrNull() ?: 0,
+                region = parts.getOrNull(0)?.split(" ")?.take(2)?.joinToString(" ").orEmpty(),
+                kind = kindOf(type, genres, null), genres = genres,
+                score = rating?.float("value")?.takeIf { it > 0f && count > 0 },
+                // 搜索给的是带签名的缩略图地址，换成和联想一样的海报地址
+                poster = t.str("cover_url")?.let { PIC.find(it) }?.let { "https://img3.doubanio.com/view/photo/m_ratio_poster/public/${it.groupValues[1]}" },
+                dtype = type, ratingCount = count,
+                director = rest.getOrNull(0).orEmpty().split(" ").filter { it.isNotBlank() }.take(2).joinToString(" / "),
+                cast = rest.getOrNull(1).orEmpty().split(" ").filter { it.isNotBlank() }.take(4),
+            )
+        }
+
     /** 详情。/movie/{id} 对剧集会 302 到 /tv/{id}，所以类型猜错也没关系 */
     fun detail(id: String, dtype: String): Title {
         val o = get("$API/$dtype/$id", ttl = 3 * DAY, stale = true).asJsonObject

@@ -46,6 +46,7 @@ import androidx.media3.ui.PlayerView
 import dev.personal.tv.audio.AudioFx
 import dev.personal.tv.source.Net
 import dev.personal.tv.ui.Route
+import dev.personal.tv.ui.components.OnAppHidden
 import dev.personal.tv.ui.components.T
 import dev.personal.tv.ui.components.fmtTime
 import dev.personal.tv.ui.theme.Palette
@@ -109,6 +110,7 @@ fun LabPlayer(r: Route.LabPlay) {
             delay(500)
         }
     }
+    OnAppHidden(onHide = { player.pause() })
     LaunchedEffect(poke) { delay(3500); if (player.isPlaying) showBar = false }
 
     Box(
@@ -136,6 +138,7 @@ fun LabPlayer(r: Route.LabPlay) {
                     layoutParams = ViewGroup.LayoutParams(-1, -1)
                     this.player = player
                     isFocusable = false
+                    keepScreenOn = true
                 }
             },
             modifier = Modifier.fillMaxSize(),

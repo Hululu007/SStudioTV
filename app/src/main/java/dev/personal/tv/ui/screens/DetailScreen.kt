@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -60,7 +62,10 @@ import dev.personal.tv.data.SimilarSource
 import dev.personal.tv.data.Store
 import dev.personal.tv.data.Title
 import dev.personal.tv.data.Heat
+import dev.personal.tv.source.Episode
+import dev.personal.tv.source.Eps
 import dev.personal.tv.source.Lines
+import dev.personal.tv.source.PlayLine
 import androidx.compose.ui.platform.LocalContext
 import dev.personal.tv.ui.LocalNav
 import dev.personal.tv.ui.Route
@@ -176,7 +181,7 @@ fun DetailScreen(r: Route.Detail) {
                         Buttons(t, p, mem, r, playReq, epReq, simReq, Modifier.padding(top = 14.dp))
                     }
                     if (t.isEpisodic && maxOf(t.totalEps, t.airedEps) > 1) {
-                        EpisodeRow(t, p, epReq, mem, Modifier.padding(top = 395.dp)) { ep -> nav.play(t.id, ep) }
+                        EpisodeRow(t, p, Lines.ref(Lines.get(t.id), p?.line), epReq, mem, Modifier.padding(top = 395.dp)) { ep, name -> nav.play(t.id, ep, name) }
                     }
                     Row(
                         Modifier.align(Alignment.BottomStart).padding(start = Dimens.SafeH, bottom = 18.dp),
@@ -267,21 +272,25 @@ private fun Buttons(
     val set = Lines.get(t.id)
     val n = set?.lines?.size ?: 0
     val searching = set == null || !set.done
-    val ep = p?.let { nextEpisode(t, it) } ?: 1
+    // 综艺这类按名字分期的，按线路里的名字算下一集
+    val named = Lines.ref(set, p?.line)?.episodes?.takeIf { it.isNotEmpty() && !Eps.numeric(it, t.name, t.isVariety) }
+    val ep = if (named != null) namedNext(t, p, named) else p?.let { nextEpisode(t, it) } ?: 1
+    val epName = named?.getOrNull(ep - 1)?.name ?: p?.epName?.takeIf { ep == p.ep }
+    val epLabel = if (named != null) Eps.label(named[ep - 1].name, t.name) else "第 $ep 集"
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         val (label, small) = when {
             dev.personal.tv.source.Sources.empty -> "先添加片源" to null
             n == 0 && searching -> "正在找线路" to set?.let { if (it.total > 0) "${it.searched}/${it.total}" else null }
             n == 0 -> "暂无线路" to null
-            p == null -> (if (t.isEpisodic) "播放 第 1 集" else "播放") to null
-            ep != p.ep -> "播放 第 $ep 集" to "新"
-            t.isEpisodic -> "继续播放 第 ${p.ep} 集" to fmtTime(p.positionSec)
+            p == null -> (if (t.isEpisodic) "播放 $epLabel" else "播放") to null
+            ep != p.ep -> "播放 $epLabel" to "新"
+            t.isEpisodic -> "继续播放 $epLabel" to fmtTime(p.positionSec)
             else -> "继续播放" to fmtTime(p.positionSec)
         }
         PillButton(
             onClick = {
                 when {
-                    n > 0 -> nav.play(t.id, ep)
+                    n > 0 -> nav.play(t.id, ep, epName)
                     dev.personal.tv.source.Sources.empty -> nav.openSources()
                     searching -> nav.toast("还在各个站点里找，找到第一条就能播")
                     else -> {
@@ -320,7 +329,7 @@ private fun Buttons(
             T("找类似", 13.sp, fg, FontWeight.SemiBold)
         }
         if (n > 0) {
-            PillButton({ nav.play(t.id, ep, openLines = true) }, Modifier.remembered(mem, "lines")) { fg ->
+            PillButton({ nav.play(t.id, ep, epName, openLines = true) }, Modifier.remembered(mem, "lines")) { fg ->
                 T("线路 · $n 条", 13.sp, fg, FontWeight.SemiBold)
                 T(if (searching) "还在找…" else "自动选", 10.sp, fg.copy(alpha = 0.6f))
             }
@@ -328,9 +337,18 @@ private fun Buttons(
     }
 }
 
-/** 选集：看过的变暗，当前集带进度，新出的标「新」，没播出的虚线框 */
+/**
+ * 选集：看过的变暗，当前集带进度，新出的标「新」，没播出的虚线框。
+ * 线路里的分集名字不是序号（综艺的「11.01 上」「加更版」）时，直接按线路里的名字排。
+ * onPlay(序号, 名字)：名字为 null 表示按序号。
+ */
 @Composable
-fun EpisodeRow(t: Title, p: Progress?, curReq: FocusRequester, mem: FocusMemory?, modifier: Modifier = Modifier, onPlay: (Int) -> Unit) {
+fun EpisodeRow(
+    t: Title, p: Progress?, line: PlayLine?, curReq: FocusRequester, mem: FocusMemory?,
+    modifier: Modifier = Modifier, onPlay: (Int, String?) -> Unit,
+) {
+    val named = line?.episodes?.takeIf { it.isNotEmpty() && !Eps.numeric(it, t.name, t.isVariety) }
+    if (named != null) return NamedEpisodeRow(t, p, named, curReq, mem, modifier, onPlay)
     val cur = p?.let { nextEpisode(t, it) } ?: 1
     val state = rememberLazyListState(initialFirstVisibleItemIndex = (cur - 5).coerceAtLeast(0))
     Column(modifier) {
@@ -358,28 +376,89 @@ fun EpisodeRow(t: Title, p: Progress?, curReq: FocusRequester, mem: FocusMemory?
                         var m = Modifier.size(54.dp, 34.dp)
                         if (ep == cur) m = m.focusRequester(curReq)
                         if (mem != null) m = m.remembered(mem, "ep:$ep")
-                        Focusable({ onPlay(ep) }, m, corner = 6.dp) { f ->
-                            Box(
-                                Modifier.fillMaxSize().background(
-                                    when {
-                                        f -> Color.White.copy(alpha = 0.22f)
-                                        isCur -> Color.White.copy(alpha = 0.16f)
-                                        seen -> Palette.Ghost4
-                                        else -> Palette.Ghost8
-                                    },
-                                ),
-                                contentAlignment = Alignment.Center,
-                            ) {
+                        Focusable({ onPlay(ep, null) }, m, corner = 6.dp) { f ->
+                            EpChip(f, seen, isCur, isNew, p, Modifier.fillMaxSize()) {
                                 T("$ep", 13.sp, if (seen && !f) Palette.T3 else Palette.T1, FontWeight.SemiBold)
-                                if (seen) Box(Modifier.align(Alignment.TopEnd).padding(5.dp).size(4.dp).background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(2.dp)))
-                                if (isNew) T("新", 6.5.sp, Palette.Star, FontWeight.Bold, Modifier.align(Alignment.TopEnd).padding(top = 2.dp, end = 3.dp))
-                                if (isCur) Box(Modifier.align(Alignment.BottomStart).fillMaxWidth(p!!.fraction).height(2.5.dp).background(Color.White))
                             }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/** 按线路里的分集名字排（综艺）：按钮宽度跟着名字走，聚焦时标题旁边显示完整名字 */
+@Composable
+private fun NamedEpisodeRow(
+    t: Title, p: Progress?, eps: List<Episode>, curReq: FocusRequester, mem: FocusMemory?,
+    modifier: Modifier, onPlay: (Int, String?) -> Unit,
+) {
+    val watched = namedWatched(t, p, eps)
+    val cur = namedNext(t, p, eps)
+    var focusedName by remember { mutableStateOf<String?>(null) }
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = (cur - 4).coerceAtLeast(0))
+    Column(modifier) {
+        Row(Modifier.padding(start = Dimens.SafeH, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            T("选集", 13.sp, weight = FontWeight.SemiBold)
+            T("共 ${eps.size} 个", 9.5.sp, Palette.T1, modifier = Modifier.background(Color.White.copy(alpha = 0.14f), RoundedCornerShape(50)).padding(horizontal = 7.dp, vertical = 2.dp))
+            T(focusedName ?: t.schedule.orEmpty(), 9.5.sp, Palette.T3, lines = 1, modifier = Modifier.widthIn(max = 520.dp))
+        }
+        EdgeScroll {
+            LazyRow(
+                state = state,
+                contentPadding = PaddingValues(horizontal = Dimens.SafeH, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                itemsIndexed(eps, key = { i, e -> "$i:${e.name}" }) { i, e ->
+                    val ep = i + 1
+                    val seen = watched != null && (ep < watched || (ep == watched && p!!.finishedEp))
+                    val isCur = watched != null && ep == watched && !p!!.finishedEp
+                    var m: Modifier = Modifier
+                    if (ep == cur) m = m.focusRequester(curReq)
+                    if (mem != null) m = m.remembered(mem, "ep:$ep")
+                    Focusable({ onPlay(ep, e.name) }, m, corner = 6.dp, onFocus = { focusedName = e.name.trim() }) { f ->
+                        EpChip(
+                            f, seen, isCur, false, p,
+                            Modifier.height(34.dp).widthIn(min = 54.dp, max = 190.dp),
+                        ) {
+                            T(Eps.label(e.name, t.name), 12.sp, if (seen && !f) Palette.T3 else Palette.T1, FontWeight.SemiBold, lines = 1, modifier = Modifier.padding(horizontal = 12.dp))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 上次看的那一期在这条线路里是第几个（1 开始）；名字对不上就按序号 */
+private fun namedWatched(t: Title, p: Progress?, eps: List<Episode>): Int? = p?.let { pr ->
+    pr.epName?.let { Eps.indexOf(eps, it, t.name) + 1 }?.takeIf { it > 0 } ?: pr.ep.takeIf { it in 1..eps.size }
+}
+
+/** 接下来该播第几个：看完了就下一个，否则接着看 */
+private fun namedNext(t: Title, p: Progress?, eps: List<Episode>): Int {
+    val w = namedWatched(t, p, eps) ?: return 1
+    return if (p!!.finishedEp && w < eps.size) w + 1 else w
+}
+
+@Composable
+private fun EpChip(f: Boolean, seen: Boolean, isCur: Boolean, isNew: Boolean, p: Progress?, modifier: Modifier, label: @Composable () -> Unit) {
+    Box(
+        Modifier.background(
+            when {
+                f -> Color.White.copy(alpha = 0.22f)
+                isCur -> Color.White.copy(alpha = 0.16f)
+                seen -> Palette.Ghost4
+                else -> Palette.Ghost8
+            },
+        ).then(modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        label()
+        if (seen) Box(Modifier.align(Alignment.TopEnd).padding(5.dp).size(4.dp).background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(2.dp)))
+        if (isNew) T("新", 6.5.sp, Palette.Star, FontWeight.Bold, Modifier.align(Alignment.TopEnd).padding(top = 2.dp, end = 3.dp))
+        if (isCur) Box(Modifier.align(Alignment.BottomStart).fillMaxWidth(p!!.fraction).height(2.5.dp).background(Color.White))
     }
 }
 
@@ -394,7 +473,7 @@ private fun MiniHead(t: Title, p: Progress?, modifier: Modifier) {
         T(t.genres.take(2).joinToString(" / "), 11.sp, Palette.T2)
         if (p != null) {
             Dot()
-            T(if (t.isEpisodic) "看到第 ${p.ep} 集" else "看到 ${fmtTime(p.positionSec)}", 11.sp, Palette.T2)
+            T(if (t.isEpisodic) "看到 ${p.epText(t.name)}" else "看到 ${fmtTime(p.positionSec)}", 11.sp, Palette.T2)
         }
     }
 }
