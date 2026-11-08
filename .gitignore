@@ -1,0 +1,25 @@
+# Gradle / IDE
+.gradle/
+.kotlin/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# 签名：keystore 和密码只在本地，千万别提交
+signing/
+*.jks
+*.keystore
+
+# 出的包
+dist/
+*.apk
+
+# 本地自用：预置片源、种子索引（见 README「自己出包」）
+app/src/main/assets/presets.json
+app/src/main/assets/search-seed.json
+
+# 早期设计稿（含海报图）
+design/
