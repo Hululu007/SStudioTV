@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -90,10 +91,36 @@ fun T(
     )
 }
 
-/** 片名大字：衬线、加粗、字距拉开 */
+/**
+ * 片名大字：衬线、加粗、字距拉开。
+ * 一行放不下先缩字号（最小到六成），还放不下再折成两行——长片名（「3年A班：从现在起，大家都是人质」）不再被省略号吃掉。
+ * 量好之前不画，免得先闪一下大字。
+ */
 @Composable
-fun DisplayTitle(text: String, size: TextUnit, modifier: Modifier = Modifier, spacing: Float = 0.06f) =
-    T(text, size, weight = FontWeight.ExtraBold, serif = true, spacing = spacing.em, modifier = modifier, lineHeight = size * 1.15f)
+fun DisplayTitle(text: String, size: TextUnit, modifier: Modifier = Modifier, spacing: Float = 0.06f) {
+    var scale by remember(text, size) { mutableStateOf(1f) }
+    var lines by remember(text, size) { mutableStateOf(1) }
+    var ready by remember(text, size) { mutableStateOf(false) }
+    val fs = size * scale
+    Text(
+        text = text,
+        modifier = modifier.drawWithContent { if (ready) drawContent() },
+        style = TextStyle(
+            fontSize = fs, color = Palette.T1, fontWeight = FontWeight.ExtraBold, fontFamily = Serif,
+            letterSpacing = spacing.em, lineHeight = fs * 1.15f,
+        ),
+        maxLines = lines,
+        overflow = TextOverflow.Ellipsis,
+        onTextLayout = { r ->
+            when {
+                !r.hasVisualOverflow -> ready = true
+                scale > 0.62f -> scale *= 0.88f
+                lines == 1 -> lines = 2
+                else -> ready = true
+            }
+        },
+    )
+}
 
 @Composable
 fun Dot() = T("·", 12.sp, Palette.T3, modifier = Modifier.padding(horizontal = 7.dp))
@@ -221,15 +248,19 @@ fun PosterCell(
             modifier = focusModifier.fillMaxWidth(), onClick = onClick, onMenu = onMenu, onFocus = onFocus, showWish = true, badge = badge,
         )
         val a = if (t.lines == 0) 0.45f else 1f
-        Row(
+        // 片名单独占两行（一行放不下的长片名、带副标题的不再被「…」吃掉），评分挪到下一行。
+        // 两行的高度固定留出来，同一排的格子下面的字才对得齐
+        val nameH = with(androidx.compose.ui.platform.LocalDensity.current) { (14.sp * 2).toDp() }
+        Column(
             // 聚焦放大 + 白圈大约外扩 8dp，文字要让开
             Modifier.fillMaxWidth().padding(top = 10.dp).graphicsLayer { alpha = a },
-            horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.Bottom,
         ) {
-            T(t.name, 10.5.sp, weight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Score(t, 9.5.sp, star = starScore)
+            T(t.name, 10.5.sp, weight = FontWeight.SemiBold, lines = 2, lineHeight = 14.sp, modifier = Modifier.heightIn(min = nameH))
+            Row(Modifier.padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                Score(t, 8.5.sp, star = starScore)
+                if (sub.isNotBlank()) T(sub, 8.sp, Palette.T3)
+            }
         }
-        T(sub, 8.sp, Palette.T3, modifier = Modifier.graphicsLayer { alpha = a })
     }
 }
 

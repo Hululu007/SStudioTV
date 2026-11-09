@@ -87,6 +87,22 @@ object Douban {
     private fun sha1(s: String): String =
         MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
+    /**
+     * 一张横版剧照（首页大背景、继续观看卡片用）。海报是竖的，裁成横图会切掉脸和片名。
+     * 剧照按热度排，前 40 张里取第一张够宽、够大的；电视剧的剧照有不少是竖的截图，实测热门的前 40 张里都有横的。
+     * 没有横的返回 null。不走磁盘缓存：结果（一个地址）由 [Stills] 存。
+     */
+    fun still(id: String, dtype: String): String? {
+        val photos = get("$API/$dtype/$id/photos", mapOf("start" to "0", "count" to "40")).asJsonObject.arr("photos")
+            .mapNotNull { it.obj()?.obj("image")?.obj("large") }
+        fun pick(minW: Int) = photos.firstOrNull { l ->
+            val w = l.int("width") ?: 0
+            val h = l.int("height") ?: 0
+            w >= minW && h > 0 && w > h * 1.3f && w < h * 2.6f
+        }
+        return (pick(1000) ?: pick(560))?.str("url")
+    }
+
     /** 最近热门：type = tv / movie */
     fun recentHot(type: String, limit: Int = 30): List<Title> =
         get("$API/subject/recent_hot/$type", mapOf("start" to "0", "limit" to "$limit"), ttl = 10 * MIN).asJsonObject.arr("items").mapNotNull { item(it.obj(), type) }

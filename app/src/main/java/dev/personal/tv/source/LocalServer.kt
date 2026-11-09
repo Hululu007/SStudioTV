@@ -9,18 +9,30 @@ import java.io.InputStream
 /**
  * 本地代理 http://127.0.0.1:9978。
  * 插件给出的播放地址经常是 127.0.0.1:9978/proxy?do=xxx&…，由这里转回插件自己处理（B 站合流、网盘取直链等）。
- * 只监听本机回环地址，局域网里别的设备访问不到。
+ *
+ * 监听所有网卡，但局域网来的请求只放行插件的配置中心：/<口令>/proxy?do=pan…（手机扫码登录夸克、UC 网盘用）。
+ * 配置中心页面里的请求都是相对地址「?do=pan&action=…」，路径里的口令会一直带着。
  */
-class LocalServer private constructor(port: Int) : NanoHTTPD("127.0.0.1", port) {
+class LocalServer private constructor(port: Int) : NanoHTTPD(null, port) {
 
     override fun serve(session: IHTTPSession): Response {
         val params = session.parameters.mapValues { it.value.firstOrNull().orEmpty() }
-        return when (session.uri) {
+        val t = token
+        var uri = session.uri
+        val viaToken = t != null && uri.startsWith("/$t/")
+        if (viaToken) uri = uri.removePrefix("/$t")
+        if (!isLocal(session.remoteIpAddress) && !(viaToken && uri == "/proxy" && params["do"] == "pan")) {
+            return newFixedLengthResponse(Response.Status.FORBIDDEN, MIME_PLAINTEXT, "forbidden")
+        }
+        return when (uri) {
             "/proxy" -> proxy(params)
             "/" -> text("ok")
             else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "not found")
         }
     }
+
+    private fun isLocal(ip: String?): Boolean =
+        ip == null || runCatching { java.net.InetAddress.getByName(ip).isLoopbackAddress }.getOrDefault(false)
 
     private fun proxy(params: Map<String, String>): Response {
         val r = runCatching { JarLoader.proxy(params) }
@@ -50,6 +62,8 @@ class LocalServer private constructor(port: Int) : NanoHTTPD("127.0.0.1", port) 
     companion object {
         private const val TAG = "LocalServer"
         private const val PRIMARY = 9978
+        /** 局域网访问口令，插件进程启动时由 SpiderService 设置（[LanToken]）；没设置时局域网一律拒绝 */
+        @Volatile var token: String? = null
         /** 已经发出去的地址可能带着旧端口，所以开过的端口都留着继续服务 */
         private val servers = java.util.concurrent.CopyOnWriteArrayList<LocalServer>()
 
@@ -57,7 +71,7 @@ class LocalServer private constructor(port: Int) : NanoHTTPD("127.0.0.1", port) 
             val s = LocalServer(port)
             if (runCatching { s.start(SOCKET_READ_TIMEOUT, true) }.isFailure) return false
             servers.add(s)
-            Log.i(TAG, "listening on 127.0.0.1:$port")
+            Log.i(TAG, "listening on *:$port")
             return true
         }
 

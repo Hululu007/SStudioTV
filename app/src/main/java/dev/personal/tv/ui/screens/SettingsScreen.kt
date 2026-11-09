@@ -73,7 +73,7 @@ fun SettingsScreen() {
             Section("片源")
             Row(
                 if (Sources.empty) "片源 · 还没有" else "片源 · ${Sources.name}",
-                sites?.let { s -> "${s.count { it.kind.supported && it.searchable }} 个站点能搜 · 添加、切换、删除" } ?: err ?: "加载中…",
+                sites?.let { s -> "${s.count { it.kind.supported && it.searchable && it.notVideo == null }} 个影视站能搜 · 添加、切换、删除" } ?: err ?: "加载中…",
                 Modifier.focusRequester(first).remembered(mem, "sources", isDefault = true),
                 onClick = { nav.openSources() },
             ) { fg -> T("›", 16.sp, fg) }
@@ -104,7 +104,7 @@ fun SettingsScreen() {
                 list == null -> T(err ?: "正在加载「${Sources.name}」…", 11.sp, Palette.T3, modifier = Modifier.padding(start = 12.dp))
                 else -> {
                     // 能用的在前；同类里保持配置里的顺序
-                    val ordered = list.sortedBy { if (it.kind.supported && it.searchable) 0 else 1 }
+                    val ordered = list.sortedBy { if (!(it.kind.supported && it.searchable)) 2 else if (it.notVideo != null) 1 else 0 }
                     LazyColumn(Modifier.weight(1f)) {
                         items(ordered, key = { it.key }) { s -> SiteRow(s, Modifier.remembered(mem, "site:${s.key}")) }
                     }
@@ -131,6 +131,7 @@ private fun SiteRow(s: SiteCfg, modifier: Modifier) {
         when {
             !s.kind.supported -> "${s.kind.label} · 暂不支持"
             !s.searchable -> "${s.kind.label} · 站点不支持搜索，合并线路时用不上"
+            s.notVideo != null && Prefs.rank(s.key) == null -> "${s.notVideo} · 看着不是影视站，找线路时不搜它；设成「优先」就会搜"
             else -> s.kind.label + if (s.kind == SiteKind.JAR) " · " + s.api.removePrefix("csp_") else ""
         },
         modifier,

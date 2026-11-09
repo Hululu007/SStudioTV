@@ -41,6 +41,30 @@ data class SiteCfg(
         type == 3 && api.endsWith(".js") -> SiteKind.JS
         else -> SiteKind.OTHER
     }
+
+    /**
+     * 不是影视站的原因（直播、音乐、听书、体育、儿歌、网盘搜索、配置页…），是影视站返回 null。
+     * 大配置里这种站点能占一半：拿片名去搜只会白等、搜出不相干的东西，线路搜索不搜它们。
+     * 只看名字和插件类名，猜错了可以在「设置 → 站点」里把它设成「优先」强制搜。
+     */
+    val notVideo: String? = run {
+        val n = name.replace(Regex("[^\\p{L}\\p{N}]"), "")
+        val a = api.removePrefix("csp_")
+        NOT_VIDEO.firstOrNull { (_, words, apis) -> words.any { it in n } || apis.any { a.startsWith(it) } }?.first
+    }
+
+    private companion object {
+        /** 类别 → 名字里的词、插件类名开头 */
+        val NOT_VIDEO = listOf(
+            Triple("直播", listOf("直播", "电台"), listOf("Live")),
+            Triple("音乐", listOf("音乐", "舞曲", "KTV", "歌曲", "儿歌", "戏曲"), listOf("Music", "Children")),
+            Triple("听书", listOf("听书", "有声", "小说", "漫画"), listOf("Book")),
+            Triple("体育", listOf("体育", "球赛"), listOf("Sport")),
+            Triple("课程", listOf("课堂", "教育", "教学", "学习"), emptyList()),
+            Triple("网盘搜索", listOf("盘搜", "网盘搜", "云盘搜"), listOf("So")),
+            Triple("工具", listOf("配置", "推送", "我的网盘", "本地"), listOf("Push", "PanConfig", "MyPan", "Config", "Local")),
+        )
+    }
 }
 
 /** 解析接口。type 0 网页（加载后嗅探），1 JSON（直接返回地址），2/3 是聚合占位（url 不是 http），flags 为空表示不限来源 */

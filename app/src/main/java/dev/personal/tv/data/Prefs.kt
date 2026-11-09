@@ -25,6 +25,25 @@ object Prefs {
     /** 不用的站点 */
     val blocked = mutableStateListOf<String>()
 
+    /** 搜索记录：从搜索结果里打开过的片（遥控器搜的是拼音首字母，记片名比记「JJC」有用），新的在前 */
+    data class Searched(val id: String, val name: String)
+    val searched = mutableStateListOf<Searched>()
+
+    fun addSearched(id: String, name: String) {
+        searched.removeAll { it.id == id }
+        searched.add(0, Searched(id, name))
+        while (searched.size > 12) searched.removeAt(searched.lastIndex)
+        saveSearched()
+    }
+
+    fun removeSearched(id: String) { searched.removeAll { it.id == id }; saveSearched() }
+
+    fun clearSearched() { searched.clear(); saveSearched() }
+
+    private fun saveSearched() {
+        sp?.edit()?.putString("searched", searched.joinToString("\n") { "${it.id}\t${it.name.replace('\n', ' ').replace('\t', ' ')}" })?.apply()
+    }
+
     enum class SitePref(val label: String) { DEFAULT("默认"), PREFER("优先"), BLOCK("不用") }
 
     fun init(ctx: Context) {
@@ -33,6 +52,9 @@ object Prefs {
         _autoLine = p.getBoolean("autoLine", true)
         preferred.addAll(p.getString("preferred", "").orEmpty().split('\n').filter { it.isNotEmpty() })
         blocked.addAll(p.getString("blocked", "").orEmpty().split('\n').filter { it.isNotEmpty() })
+        searched.addAll(p.getString("searched", "").orEmpty().split('\n').mapNotNull { l ->
+            l.split('\t', limit = 2).takeIf { it.size == 2 && it[0].isNotEmpty() }?.let { Searched(it[0], it[1]) }
+        })
     }
 
     fun pref(siteKey: String): SitePref = when (siteKey) {

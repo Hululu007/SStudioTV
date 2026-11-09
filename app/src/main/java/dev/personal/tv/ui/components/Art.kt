@@ -7,6 +7,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -105,7 +107,50 @@ fun PosterArt(t: Title, titleSize: TextUnit, modifier: Modifier = Modifier, bott
     }
 }
 
-/** 横向大背景（首页、详情、继续观看卡片）：海报裁成横图，上面再盖各页面自己的遮罩 */
+/**
+ * 横版画面（首页大背景、继续观看卡片）：有横版剧照用剧照；没有（或还在查）时不裁海报——
+ * 底下铺一张缩得很小再放大的海报（自然就是糊的，老系统也有效果），上面靠 [posterAlign] 摆完整的竖海报。
+ * 竖海报裁成横图会只剩中间一条，脸和片名都被切掉。
+ */
+@Composable
+fun Landscape(
+    t: Title,
+    modifier: Modifier = Modifier,
+    posterAlign: Alignment = Alignment.CenterEnd,
+    stillAlign: Alignment = Alignment.Center,
+    posterInset: androidx.compose.foundation.layout.PaddingValues = androidx.compose.foundation.layout.PaddingValues(0.dp),
+) {
+    val still = dev.personal.tv.data.Stills.get(t)
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    Box(modifier.art(t.art, silhouette = false).clipToBounds()) {
+        androidx.compose.animation.Crossfade(still, animationSpec = androidx.compose.animation.core.tween(350), label = "still") { s ->
+            Box(Modifier.fillMaxSize()) {
+                if (s != null) {
+                    AsyncImage(
+                        model = s, contentDescription = null, contentScale = ContentScale.Crop,
+                        alignment = stillAlign, modifier = Modifier.fillMaxSize(),
+                    )
+                } else if (t.poster != null) {
+                    val tiny = remember(t.poster) {
+                        coil.request.ImageRequest.Builder(ctx).data(t.poster).size(16, 24)
+                            .memoryCacheKey("tiny:${t.poster}").build()
+                    }
+                    AsyncImage(
+                        model = tiny, contentDescription = null, contentScale = ContentScale.Crop,
+                        filterQuality = androidx.compose.ui.graphics.FilterQuality.High,
+                        modifier = Modifier.fillMaxSize().graphicsLayer { alpha = 0.7f },
+                    )
+                    AsyncImage(
+                        model = t.poster, contentDescription = null, contentScale = ContentScale.Fit,
+                        alignment = posterAlign, modifier = Modifier.fillMaxSize().padding(posterInset),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 模糊背景（详情页、播放器加载时）：海报裁成横图，上面再盖各页面自己的遮罩 */
 @Composable
 fun Backdrop(t: Title, modifier: Modifier = Modifier, silhouette: Boolean = true, alignment: Alignment = Alignment.TopCenter) {
     Box(modifier.art(t.art, silhouette)) {

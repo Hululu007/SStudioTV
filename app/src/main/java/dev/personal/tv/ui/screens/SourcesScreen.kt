@@ -38,6 +38,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -48,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
+import dev.personal.tv.source.PluginPortal
 import dev.personal.tv.source.Remote
 import dev.personal.tv.source.Sources
 import dev.personal.tv.source.TvConfig
@@ -86,6 +88,18 @@ fun SourcesScreen() {
     LaunchedEffect(Sources.list.size) {
         if (Sources.list.size > lastSize) nav.toast("已添加：${Sources.list.last().name}")
         lastSize = Sources.list.size
+    }
+
+    // 右栏：焦点在「插件配置中心」上时换成插件配置页的二维码
+    val ctx = LocalContext.current
+    var pluginPanel by remember { mutableStateOf(false) }
+    var portal by remember(Sources.url) { mutableStateOf<PluginPortal.State?>(null) }
+    fun showPortal() {
+        pluginPanel = true
+        if (portal == null || portal is PluginPortal.State.Missing) {
+            portal = PluginPortal.State.Loading
+            scope.launch { portal = withContext(Dispatchers.IO) { runCatching { PluginPortal.open(ctx) }.getOrElse { PluginPortal.State.Missing("打不开：${it.message?.take(40)}") } } }
+        }
     }
 
     // 当前片源的概况
@@ -143,6 +157,7 @@ fun SourcesScreen() {
                         modifier = Modifier.fillMaxWidth().remembered(mem, "src:${e.url}", isDefault = cur)
                             .then(if (cur) Modifier.focusRequester(first) else Modifier),
                         corner = 9.dp, scale = 1.02f, ring = false,
+                        onFocus = { pluginPanel = false },
                         onMenu = {
                             val now = System.currentTimeMillis()
                             if (armed == e.url && now - armedAt < 3000) {
@@ -170,7 +185,7 @@ fun SourcesScreen() {
                         onClick = { if (!typing) typing = true else { runCatching { field.requestFocus() }; kb?.show() } },
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp).remembered(mem, "type", isDefault = Sources.empty)
                             .then(if (Sources.empty) Modifier.focusRequester(first) else Modifier),
-                        corner = 9.dp, scale = 1.02f, ring = false,
+                        corner = 9.dp, scale = 1.02f, ring = false, onFocus = { pluginPanel = false },
                     ) { f ->
                         Row(
                             Modifier.fillMaxWidth().height(50.dp)
@@ -200,11 +215,29 @@ fun SourcesScreen() {
                         }
                     }
                 }
+                if (!Sources.empty) item {
+                    Focusable(
+                        onClick = { portal = null; showPortal() },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).remembered(mem, "portal"),
+                        corner = 9.dp, scale = 1.02f, ring = false, onFocus = { showPortal() },
+                    ) { f ->
+                        Row(
+                            Modifier.fillMaxWidth().height(44.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                T("插件配置中心 · 网盘登录", 12.sp, if (f) Palette.Bg else Palette.T2, FontWeight.SemiBold)
+                                T("夸克、UC 等网盘站点要先在这里登录，右边扫码用手机操作", 9.sp, if (f) Palette.Bg.copy(alpha = 0.6f) else Palette.T3)
+                            }
+                            T("›", 16.sp, if (f) Palette.Bg else Palette.T3)
+                        }
+                    }
+                }
                 item {
                     Focusable(
                         onClick = { nav.openLab() },
                         modifier = Modifier.fillMaxWidth().remembered(mem, "lab"),
-                        corner = 9.dp, scale = 1.02f, ring = false,
+                        corner = 9.dp, scale = 1.02f, ring = false, onFocus = { pluginPanel = false },
                     ) { f ->
                         Row(
                             Modifier.fillMaxWidth().height(44.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp),
@@ -230,6 +263,7 @@ fun SourcesScreen() {
             Modifier.width(330.dp).fillMaxHeight().background(Palette.Ghost6, RoundedCornerShape(14.dp)).padding(22.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            if (pluginPanel) { PortalPanel(portal); return@Column }
             T("手机扫码添加", 15.sp, weight = FontWeight.Bold)
             T("手机和电视连同一个 Wi-Fi，扫码后粘贴配置地址", 10.sp, Palette.T3, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
             val u = remoteUrl
@@ -247,10 +281,30 @@ fun SourcesScreen() {
     LaunchedEffect(Unit) { if (mem.lastKey == null) { delay(80); runCatching { first.requestFocus() } } }
 }
 
+@Composable
+private fun androidx.compose.foundation.layout.ColumnScope.PortalPanel(st: PluginPortal.State?) {
+    T("插件配置中心", 15.sp, weight = FontWeight.Bold)
+    T("手机和电视连同一个 Wi-Fi，扫码打开插件自带的设置页", 10.sp, Palette.T3, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
+    val u = (st as? PluginPortal.State.Ready)?.url
+    Box(Modifier.size(200.dp).background(if (u != null) Color.White else Palette.Ghost6, RoundedCornerShape(10.dp)).padding(12.dp), contentAlignment = Alignment.Center) {
+        when (st) {
+            is PluginPortal.State.Ready -> Qr(st.url, Modifier.fillMaxSize())
+            is PluginPortal.State.Missing -> T(st.why, 11.sp, Palette.T2, lines = 3)
+            else -> T("正在唤醒插件…", 11.sp, Palette.T3)
+        }
+    }
+    if (u != null) T(u, 9.sp, Palette.T3, lines = 2, modifier = Modifier.padding(top = 14.dp))
+    Spacer(Modifier.weight(1f))
+    T(
+        "网盘类站点（名字带 4K 的多半是）要先登录夸克 / UC，否则播放会提示「请先去配置中心登录」。登录信息由插件存在电视上；只有带这串口令的地址能从手机打开。",
+        9.5.sp, Palette.T3, lines = 5,
+    )
+}
+
 private fun summary(c: TvConfig): String {
-    val usable = c.sites.count { it.kind.supported && it.searchable }
+    val usable = c.sites.count { it.kind.supported && it.searchable && it.notVideo == null }
     return buildString {
-        append("${c.sites.size} 个站点（$usable 个能搜）")
+        append("${c.sites.size} 个站点（$usable 个影视站能搜）")
         if (c.lives.isNotEmpty()) append(" · ${c.lives.size} 个直播源")
         if (c.parses.isNotEmpty()) append(" · ${c.parses.size} 个解析")
     }

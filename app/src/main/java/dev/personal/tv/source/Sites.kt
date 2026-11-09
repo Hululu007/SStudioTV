@@ -122,6 +122,9 @@ class JarSite(private val jar: String, private val md5: String?, private val cfg
     private fun call(method: String, vararg args: String) =
         SpiderClient.call(jar, md5, cfg.key, cfg.api, cfg.ext, method, *args)
 
+    /** 只加载 jar、初始化插件（插件的配置中心、本地代理要先有它） */
+    fun wake() { call("isVideo", "") }
+
     override fun home() = VodJson.page(call("home"))
     override fun category(tid: String, page: Int) = VodJson.page(call("category", tid, "$page"))
     override fun search(wd: String) = VodJson.page(call("search", wd)).list

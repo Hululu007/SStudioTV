@@ -17,7 +17,10 @@ class SpiderService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        Thread { LocalServer.start() }.start()
+        Thread {
+            LocalServer.token = dev.personal.tv.source.LanToken.get(applicationContext)
+            LocalServer.start()
+        }.start()
         Log.i(TAG, "spider process up, pid=${android.os.Process.myPid()}")
     }
 
@@ -37,6 +40,8 @@ class SpiderService : Service() {
                     "isVideo" -> sp.isVideoFormat(a[0]).toString()
                     else -> error("未知方法 $method")
                 }.orEmpty()
+                // 解析结果的格式各家不一样，出问题时要看原文
+                if (method == "play") Log.i(TAG, "play $api → ${r.take(800)}")
                 if (r.length > BIG) {
                     val f = File(cacheDir, "spider-out").apply { mkdirs() }.let { File(it, "${System.nanoTime()}.json") }
                     f.writeText(r)

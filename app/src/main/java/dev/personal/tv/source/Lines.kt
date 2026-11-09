@@ -144,7 +144,10 @@ object Lines {
             return
         }
         // 设置里标了「不用」的站点不搜
-        val sites = cfg.sites.filter { it.searchable && it.kind.supported && it.key !in Prefs.blocked }
+        // 直播、音乐、听书、网盘搜索这类不是影视的站点也不搜（手动设成「优先」的除外）
+        val sites = cfg.sites.filter {
+            it.searchable && it.kind.supported && it.key !in Prefs.blocked && (it.notVideo == null || Prefs.rank(it.key) != null)
+        }
         set.total = sites.size
         val q = Match.query(t.name)
         Log.i(TAG, "${t.name} → 「$q」· ${sites.size} 个站点")

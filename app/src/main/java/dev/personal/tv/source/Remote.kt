@@ -46,7 +46,7 @@ object Remote {
         server?.stop(); server = null; url = null
     }
 
-    private fun lanIp(): String? = runCatching {
+    fun lanIp(): String? = runCatching {
         NetworkInterface.getNetworkInterfaces().toList()
             .filter { it.isUp && !it.isLoopback }
             .flatMap { it.inetAddresses.toList() }

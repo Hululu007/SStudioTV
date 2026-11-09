@@ -35,6 +35,9 @@ data class PlayInfo(val url: String, val headers: Map<String, String>, val parse
     var format: String? = null
 }
 
+/** 插件自己说的失败原因（要登录网盘、触发验证、资源失效…），原样给人看 */
+class PluginError(msg: String) : Exception(msg)
+
 object VodJson {
 
     fun page(text: String): VodPage {
@@ -45,19 +48,30 @@ object VodJson {
         return VodPage(classes, o.arr("list").mapNotNull { it.obj() }.map(::vod))
     }
 
+    /**
+     * 插件 playerContent 的结果。没给地址时：parse = 1 且原 id 本身是网页地址，交给解析；
+     * 否则是插件在报错（{"msg": "还没有配置夸克 Cookie…", "url": ""}），把 msg 抛出去给界面显示——
+     * 以前拿集的 id（base64、「a|||b」之类）当地址去播，只会得到一句看不懂的「播放失败」。
+     */
     fun play(text: String, fallbackUrl: String): PlayInfo {
         val o = root(text) ?: return PlayInfo(fallbackUrl, emptyMap(), parse = true, jx = false)
         val u = o.get("url")
         // 多清晰度时 url 是 ["1080P", "http://…", "720P", "http://…"]
         val url = when {
-            u == null || u.isJsonNull -> fallbackUrl
+            u == null || u.isJsonNull -> ""
             u.isJsonArray -> u.asJsonArray.let { a -> if (a.size() >= 2) a[1].asString else a.firstOrNull()?.asString.orEmpty() }
-            else -> u.asString
+            u.isJsonPrimitive -> u.asString
+            else -> ""
+        }.trim()
+        val parse = o.int("parse", 0) == 1
+        if (url.isEmpty() && !(parse && fallbackUrl.startsWith("http"))) {
+            val msg = (o.str("msg") ?: o.str("message") ?: o.str("error"))?.trim()?.takeIf { it.isNotEmpty() }
+            throw PluginError(msg ?: "插件没给播放地址")
         }
         return PlayInfo(
             url = url.ifBlank { fallbackUrl },
             headers = o.map("header").ifEmpty { o.map("headers") },
-            parse = o.int("parse", 0) == 1,
+            parse = parse,
             jx = o.int("jx", 0) == 1,
         )
     }

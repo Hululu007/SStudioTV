@@ -57,6 +57,9 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import dev.personal.tv.data.Catalog
+import dev.personal.tv.data.Prefs
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import dev.personal.tv.data.SearchIndex
 import dev.personal.tv.ui.LocalNav
 import dev.personal.tv.ui.Route
@@ -162,6 +165,7 @@ fun SearchScreen() {
 
         // ------------- 右：结果 -------------
         Column(Modifier.padding(start = 388.dp, end = Dimens.SafeH, top = 36.dp)) {
+            if (q.isEmpty() && Prefs.searched.isNotEmpty()) History(mem)
             Row(Modifier.height(50.dp).padding(top = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
                 T(if (q.isEmpty()) "大家最近在搜" else "「${q.trim()}」的结果", 17.sp, weight = FontWeight.Bold)
                 val building = SearchIndex.progress?.let { " · 片库索引中 $it" }.orEmpty()
@@ -184,7 +188,7 @@ fun SearchScreen() {
                     items(results, key = { it.id }) { t ->
                         PosterCell(
                             t, focusModifier = Modifier.remembered(mem, "r:${t.id}"),
-                            onClick = { nav.openDetail(t.id) }, onMenu = { nav.posterMenu(t) },
+                            onClick = { if (q.isNotBlank()) Prefs.addSearched(t.id, t.name); nav.openDetail(t.id) }, onMenu = { nav.posterMenu(t) },
                             sub = listOf(if (t.year > 0) "${t.year}" else "", t.kind.label, t.region.takeIf { it != "中国大陆" }.orEmpty()).filter { it.isNotEmpty() }.joinToString(" · "),
                             starScore = true,
                             badge = if (t.lines > 0) "${t.lines} 线路" else null,
@@ -192,6 +196,47 @@ fun SearchScreen() {
                     }
                     if (searching && results.size < 5) items(3) { GhostCell() }
                 }
+            }
+        }
+    }
+}
+
+/** 最近搜过：OK 打开，≡ 删掉这一条 */
+@Composable
+private fun History(mem: dev.personal.tv.ui.components.FocusMemory) {
+    val nav = LocalNav.current
+    Row(Modifier.height(50.dp).padding(top = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+        T("最近搜过", 17.sp, weight = FontWeight.Bold)
+        T("OK 打开 · ≡ 删掉这条", 10.5.sp, Palette.T3)
+    }
+    LazyRow(
+        Modifier.padding(top = 4.dp, bottom = 6.dp),
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(Prefs.searched, key = { it.id }) { h ->
+            Focusable(
+                onClick = { Prefs.addSearched(h.id, h.name); nav.openDetail(h.id) },
+                modifier = Modifier.remembered(mem, "h:${h.id}"),
+                corner = 18.dp, scale = 1.06f, ring = false,
+                onMenu = { Prefs.removeSearched(h.id) },
+            ) { f ->
+                T(
+                    h.name, 12.sp, if (f) Palette.Bg else Palette.T1, FontWeight.SemiBold,
+                    Modifier.background(if (f) Color.White else Palette.Ghost8, RoundedCornerShape(18.dp)).padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+        }
+        item(key = "clear") {
+            Focusable(
+                onClick = { Prefs.clearSearched(); nav.toast("搜索记录清空了") },
+                modifier = Modifier.remembered(mem, "h:clear"),
+                corner = 18.dp, scale = 1.06f, ring = false,
+            ) { f ->
+                T(
+                    "清空", 12.sp, if (f) Palette.Bg else Palette.T3, FontWeight.SemiBold,
+                    Modifier.background(if (f) Color.White else Color.Transparent, RoundedCornerShape(18.dp)).padding(horizontal = 16.dp, vertical = 8.dp),
+                )
             }
         }
     }

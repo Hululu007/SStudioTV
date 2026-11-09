@@ -371,6 +371,8 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
                         set.lines.isEmpty() && !Lines.online(ctx) -> "网络断了。网络好了按 OK 重试"
                         set.lines.isEmpty() -> set.error ?: "「${Sources.name}」的 ${set.total} 个站点里都没找到《${t.name}》"
                         set.lines.none { indexIn(it) != null } -> "所有线路都还没有「${epText()}」"
+                        set.failed.values.any { dev.personal.tv.source.PluginPortal.wantsLogin(it) } ->
+                            "${tried.size} 条线路都播不了；网盘线路要先在「片源 → 插件配置中心」扫码登录"
                         else -> "${tried.size} 条线路都试过了，都播不了"
                     }
                     return
@@ -418,13 +420,20 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         status = "正在解析 · ${l.siteName} · ${l.flag}"
         player.stop()
         val t0 = System.currentTimeMillis()
+        var why = "解析不出视频地址"
         val info = try {
             withTimeoutOrNull(45_000) { Lines.yieldTo { resolve(c, l, e) } }
         } catch (x: Throwable) {
-            Log.w(TAG, "resolve ${l.key}", x); null
+            Log.w(TAG, "resolve ${l.key}", x)
+            val root = generateSequence(x) { it.cause }.last()
+            // 插件进程里抛的 PluginError 过 binder 后只剩文字
+            (x as? dev.personal.tv.source.PluginError ?: root as? dev.personal.tv.source.PluginError)?.message?.let {
+                why = it.take(48) + if (dev.personal.tv.source.PluginPortal.wantsLogin(it)) "（在「片源 → 插件配置中心」登录）" else ""
+            }
+            null
         }
         if (info == null) {
-            set.failed[l.key] = "解析不出视频地址"
+            set.failed[l.key] = why
             Log.i(TAG, "✗ ${l.key} 解析失败 ${System.currentTimeMillis() - t0}ms")
             return false
         }

@@ -42,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -69,7 +70,8 @@ import dev.personal.tv.ui.components.ProgressLine
 import dev.personal.tv.ui.components.SectionTitle
 import dev.personal.tv.ui.components.Stars
 import dev.personal.tv.ui.components.T
-import dev.personal.tv.ui.components.Backdrop
+import dev.personal.tv.ui.components.Landscape
+import dev.personal.tv.source.Eps
 import dev.personal.tv.ui.components.dashedBorder
 import dev.personal.tv.ui.components.fmtTime
 import dev.personal.tv.ui.components.fmtWan
@@ -102,7 +104,11 @@ fun HomeScreen(mem: FocusMemory) {
 
     Box(Modifier.fillMaxSize()) {
         Crossfade(backdrop, animationSpec = tween(400), label = "backdrop") { a ->
-            if (a != null) Backdrop(a, Modifier.fillMaxSize().padding(start = 260.dp, bottom = 130.dp), alignment = Alignment.Center)
+            // 有横版剧照铺满；没有就把完整的竖海报摆在右上（继续观看那一行上面），不裁
+            if (a != null) Landscape(
+                a, Modifier.fillMaxSize().padding(start = 260.dp, bottom = 130.dp),
+                posterInset = PaddingValues(top = 56.dp, end = Dimens.SafeH, bottom = 84.dp),
+            )
         }
         Box(Modifier.fillMaxSize().drawBehind { drawHomeScrims() })
 
@@ -209,7 +215,8 @@ fun HomeScreen(mem: FocusMemory) {
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawHomeScrims() {
     drawRect(
         Brush.horizontalGradient(
-            0f to Bg, 0.26f to Bg.copy(alpha = 0.92f), 0.58f to Bg.copy(alpha = 0.35f), 0.8f to Color.Transparent,
+            // 背景图从左边 260dp 开始：到那儿之前必须全遮住，否则亮的图会露出一条竖边
+            0f to Bg, 0.28f to Bg, 0.6f to Bg.copy(alpha = 0.35f), 0.8f to Color.Transparent,
         ),
     )
     drawRect(
@@ -217,7 +224,9 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawHomeScrims() {
             0f to Color.Transparent, 0.32f to Color.Transparent, 0.52f to Bg.copy(alpha = 0.6f), 0.7f to Bg, 1f to Bg,
         ),
     )
-    drawRect(Brush.verticalGradient(0f to Bg.copy(alpha = 0.7f), 0.18f to Color.Transparent))
+    drawRect(Brush.verticalGradient(0f to Bg.copy(alpha = 0.8f), 0.2f to Color.Transparent))
+    // 右上角是时钟和设置；剧照常把片名题字放在这个角，压暗一点免得糊在一起
+    drawRect(Brush.radialGradient(0f to Bg.copy(alpha = 0.92f), 0.45f to Bg.copy(alpha = 0.7f), 1f to Color.Transparent, center = Offset(size.width, 0f), radius = size.width * 0.3f))
 }
 
 @Composable
@@ -228,7 +237,7 @@ private fun HeroInfo(t: Title, p: Progress?, hotRank: Int) {
             Spacer(Modifier.width(6.dp))
             val eyebrow = when {
                 p != null && Store.newEpisodes(t, p) > 0 -> "有更新 · 你看完了第 ${p.ep} 集，已更新至 ${t.airedEps} 集"
-                p != null && t.isEpisodic -> "继续观看 · ${p.epText(t.name)} · 剩余 ${p.remainingMin} 分钟"
+                p != null && t.isEpisodic -> "继续观看 · ${p.epText(t.name)} · 剩余 ${p.remainingMin} 分钟" + (restText(t, p)?.let { " · $it" } ?: "")
                 p != null -> "继续观看 · 电影 · 剩余 ${p.remainingMin} 分钟"
                 hotRank >= 0 -> "豆瓣 · 最近热门" + if (t.ratingCount > 0) " · ${fmtWan(t.ratingCount)}人评价" else ""
                 else -> t.kind.label
@@ -270,6 +279,31 @@ private fun HeroInfo(t: Title, p: Progress?, hotRank: Int) {
     }
 }
 
+/**
+ * 追剧进度的第二行：「后面还有 21 集」「追到最新 · 共 30 集」「最后一集」。
+ * 按序号的看豆瓣的已播集数；按名字分期的综艺看线路（线路还没搜过就不显示）。算不出来返回 null。
+ */
+internal fun restText(t: Title, p: Progress): String? {
+    if (!t.isEpisodic) return null
+    val cur = p.episodeNo(t.name)
+    if (p.isNamed(t.name) || cur == null) {
+        val eps = Lines.ref(Lines.get(t.id), p.line)?.episodes ?: return null
+        val i = p.epName?.let { Eps.indexOf(eps, it, t.name) } ?: -1
+        if (i < 0) return null
+        val rest = Eps.mainCount(eps.drop(i + 1), t.name)
+        return if (rest > 0) "后面还有 $rest 期" else "追到最新一期"
+    }
+    val aired = t.airedEps
+    if (aired <= 1 || cur > aired) return null
+    val rest = aired - cur
+    val updating = t.totalEps > aired
+    return when {
+        rest > 0 -> "后面还有 $rest 集" + if (updating) " · 更新中" else ""
+        updating -> "追到最新 · 共 ${t.totalEps} 集"
+        else -> "最后一集"
+    }
+}
+
 /** 看完了这一集就播下一集，否则接着这一集；线路搜过就按线路里的名字找下一集 */
 internal fun resumeTarget(t: Title, p: Progress): Target? =
     Resume.target(t, p, Lines.ref(Lines.get(t.id), p.line)?.episodes)
@@ -293,19 +327,25 @@ private fun ContinueCard(t: Title, p: Progress, modifier: Modifier, onFocus: () 
             )
         },
     ) {
-        Backdrop(t, Modifier.fillMaxSize(), alignment = Alignment.Center)
+        Landscape(t, Modifier.fillMaxSize())
         Column(
             Modifier.align(Alignment.BottomStart).fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.82f))))
-                .padding(start = 11.dp, end = 11.dp, top = 28.dp, bottom = 12.dp),
+                // 浅色剧照（白天外景）上字也要看得清
+                .background(Brush.verticalGradient(0f to Color.Transparent, 0.4f to Color.Black.copy(alpha = 0.6f), 1f to Color.Black.copy(alpha = 0.9f)))
+                .padding(start = 11.dp, end = 11.dp, top = 36.dp, bottom = 12.dp),
         ) {
             T(t.name, 12.5.sp, weight = FontWeight.SemiBold)
             val sub = when {
-                newEps > 0 -> "看完第 ${p.ep} 集 · 已更新至 ${t.airedEps} 集"
-                t.isEpisodic -> "${p.epText(t.name)} · 剩余 ${p.remainingMin} 分钟"
-                else -> "电影 · 剩余 ${p.remainingMin} 分钟"
+                newEps > 0 -> "看完第 ${p.ep} 集 · 更新到第 ${t.airedEps} 集"
+                t.isEpisodic && p.finishedEp -> "看完${p.epText(t.name)}"
+                t.isEpisodic -> "${p.epText(t.name)} · 剩 ${p.remainingMin} 分钟"
+                p.finishedEp -> "看完了"
+                else -> "电影 · 剩 ${p.remainingMin} 分钟"
             }
             T(sub, 9.5.sp, Palette.T2)
+            // 第二行：还剩几集 / 下一集是哪集，看完一集回来一眼就知道进度
+            val more = if (newEps > 0) null else restText(t, p)
+            if (more != null) T(more, 8.5.sp, Palette.T3, modifier = Modifier.padding(top = 1.dp))
         }
         if (newEps > 0) {
             T(
