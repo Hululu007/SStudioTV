@@ -36,6 +36,14 @@ import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import kotlinx.coroutines.delay
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -65,9 +73,16 @@ import dev.personal.tv.ui.theme.Palette
 private val KINDS = listOf(Kind.MOVIE, Kind.SERIES, Kind.VARIETY, Kind.ANIME, Kind.DOC)
 /** 榜单对应豆瓣选片接口的排序：近期热度 / 高分优先 / 首播时间 / 综合 */
 private val LISTS = listOf("近期热门" to "U", "高分" to "S", "新上线" to "R", "综合" to "T")
-private val GENRES = listOf("全部类型", "悬疑", "犯罪", "剧情", "爱情", "科幻", "喜剧", "动作", "家庭", "历史")
-private val REGIONS = listOf("全部地区", "华语", "中国大陆", "中国香港", "中国台湾", "日本", "韩国", "美国", "英国", "欧美")
-private val YEARS = listOf("全部年代", "2026", "2025", "2020年代", "2010年代", "2000年代", "90年代")
+// 都是豆瓣选片接口认的标签；改成下拉列表后不怕选项多
+private val GENRES = listOf(
+    "全部类型", "剧情", "喜剧", "爱情", "悬疑", "犯罪", "动作", "科幻", "奇幻", "惊悚",
+    "恐怖", "家庭", "古装", "武侠", "历史", "战争", "冒险", "传记", "动画",
+)
+private val REGIONS = listOf(
+    "全部地区", "华语", "欧美", "中国大陆", "中国香港", "中国台湾", "美国", "英国",
+    "日本", "韩国", "泰国", "法国", "德国", "西班牙", "印度",
+)
+private val YEARS = listOf("全部年代", "2026", "2025", "2024", "2023", "2020年代", "2010年代", "2000年代", "90年代", "80年代", "70年代")
 private val SCORES = listOf("不限分数" to 0f, "7.5 分以上" to 7.5f, "8 分以上" to 8f, "9 分以上" to 9f)
 
 /** 类别 → 豆瓣大类和固定标签 */
@@ -143,10 +158,10 @@ fun FindScreen(mem: FocusMemory) {
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 T("筛选", 9.5.sp, Palette.T3, modifier = Modifier.padding(end = 3.dp))
-                Cycle(GENRES, genre, { genre = it }, mem, "genre")
-                Cycle(REGIONS, region, { region = it }, mem, "region")
-                Cycle(YEARS, year, { year = it }, mem, "year")
-                Cycle(SCORES.map { it.first }, score, { score = it }, mem, "score")
+                Dropdown(GENRES, genre, { genre = it }, mem, "genre")
+                Dropdown(REGIONS, region, { region = it }, mem, "region")
+                Dropdown(YEARS, year, { year = it }, mem, "year")
+                Dropdown(SCORES.map { it.first }, score, { score = it }, mem, "score")
                 Spacer(Modifier.weight(1f))
                 T(
                     when {
@@ -182,13 +197,72 @@ private object FindPages {
     }
 }
 
-/** 下拉式筛选：遥控器上按 OK 依次切换选项，比弹出列表少按几下 */
+/**
+ * 下拉筛选：OK 在胶囊下面弹出全部选项，焦点直接落在当前选中的那项，上下选、OK 确定，返回键关掉。
+ * 选项多时分几列摆（每列最多 11 项），一屏看全，不用滚。关掉后焦点回到胶囊上。
+ */
 @Composable
-private fun Cycle(options: List<String>, value: Int, set: (Int) -> Unit, mem: FocusMemory, key: String) {
-    Chip(
-        options[value], value != 0, { set((value + 1) % options.size) }, Modifier.remembered(mem, key),
-        idleBg = Color.White.copy(alpha = 0.1f), dropdown = true,
-    )
+private fun Dropdown(options: List<String>, value: Int, set: (Int) -> Unit, mem: FocusMemory, key: String) {
+    var open by remember { mutableStateOf(false) }
+    var wasOpen by remember { mutableStateOf(false) }
+    val anchor = remember { FocusRequester() }
+    LaunchedEffect(open) {
+        if (!open && wasOpen) { delay(30); runCatching { anchor.requestFocus() } }
+        wasOpen = open
+    }
+    Box {
+        Chip(
+            options[value], value != 0, { open = true }, Modifier.focusRequester(anchor).remembered(mem, key),
+            idleBg = Color.White.copy(alpha = 0.1f), dropdown = true,
+        )
+        if (open) {
+            val dy = with(LocalDensity.current) { 26.dp.roundToPx() }
+            Popup(
+                offset = IntOffset(0, dy),
+                onDismissRequest = { open = false },
+                properties = PopupProperties(focusable = true),
+            ) {
+                OptionList(options, value) { i -> open = false; if (i != value) set(i) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OptionList(options: List<String>, value: Int, pick: (Int) -> Unit) {
+    val current = remember { FocusRequester() }
+    val cols = (options.size + 10) / 11
+    val rows = (options.size + cols - 1) / cols
+    Row(
+        Modifier.shadow(18.dp, RoundedCornerShape(10.dp))
+            .background(Color(0xFF1D2025), RoundedCornerShape(10.dp)).padding(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        for (c in 0 until cols) {
+            Column(Modifier.width(118.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                for (i in c * rows until minOf(options.size, (c + 1) * rows)) {
+                    val sel = i == value
+                    Focusable(
+                        { pick(i) },
+                        Modifier.fillMaxWidth().then(if (sel) Modifier.focusRequester(current) else Modifier),
+                        corner = 6.dp, scale = 1.03f, ring = false,
+                    ) { f ->
+                        Row(
+                            Modifier.fillMaxWidth().height(26.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            T(
+                                options[i], 11.sp, if (f) Palette.Bg else if (sel) Palette.T1 else Palette.T2,
+                                if (sel || f) FontWeight.SemiBold else FontWeight.Normal, Modifier.weight(1f),
+                            )
+                            if (sel) T("✓", 11.sp, if (f) Palette.Bg else Palette.Douban, FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    LaunchedEffect(Unit) { delay(30); runCatching { current.requestFocus() } }
 }
 
 @Composable
