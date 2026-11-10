@@ -54,6 +54,7 @@ import dev.personal.tv.ui.screens.SourceLab
 import dev.personal.tv.ui.screens.LabPlayer
 import dev.personal.tv.ui.screens.LivePlayer
 import dev.personal.tv.ui.screens.SourcesScreen
+import dev.personal.tv.ui.screens.PansScreen
 import dev.personal.tv.ui.theme.Palette
 import dev.personal.tv.ui.theme.TvScale
 import kotlinx.coroutines.delay
@@ -68,6 +69,7 @@ sealed class Route(val key: String) {
     data object Lab : Route("lab")
     data object Settings : Route("settings")
     data object Sources : Route("sources")
+    data object Pans : Route("pans")
     class LivePlay(val group: Int, val channel: Int, n: Int) : Route("liveplay:$n")
     class LabPlay(val title: String, val url: String, val headers: Map<String, String>, val parse: Boolean, val format: String?, n: Int) : Route("labplay:$n")
 }
@@ -108,6 +110,7 @@ class Navigator {
     fun openLab() = push(Route.Lab)
     fun openSettings() = push(Route.Settings)
     fun openSources() = push(Route.Sources)
+    fun openPans() = push(Route.Pans)
     fun playLive(group: Int, channel: Int) = push(Route.LivePlay(group, channel, ++seq))
     fun playUrl(title: String, url: String, headers: Map<String, String>, parse: Boolean, format: String? = null) =
         push(Route.LabPlay(title, url, headers, parse, format, ++seq))
@@ -176,6 +179,7 @@ fun AppNav() {
                         Route.Lab -> SourceLab()
                         Route.Settings -> SettingsScreen()
                         Route.Sources -> SourcesScreen()
+                        Route.Pans -> PansScreen()
                         is Route.LivePlay -> LivePlayer(r)
                         is Route.LabPlay -> LabPlayer(r)
                     }

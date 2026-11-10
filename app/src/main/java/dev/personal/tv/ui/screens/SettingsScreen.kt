@@ -32,6 +32,7 @@ import dev.personal.tv.audio.AudioFx
 import dev.personal.tv.data.Prefs
 import dev.personal.tv.data.SearchIndex
 import dev.personal.tv.source.Lines
+import dev.personal.tv.source.PanLogin
 import dev.personal.tv.source.SiteCfg
 import dev.personal.tv.source.SiteKind
 import dev.personal.tv.source.Sources
@@ -76,6 +77,12 @@ fun SettingsScreen() {
                 sites?.let { s -> "${s.count { it.kind.supported && it.searchable && it.notVideo == null }} 个影视站能搜 · 添加、切换、删除" } ?: err ?: "加载中…",
                 Modifier.focusRequester(first).remembered(mem, "sources", isDefault = true),
                 onClick = { nav.openSources() },
+            ) { fg -> T("›", 16.sp, fg) }
+            if (!Sources.empty) Row(
+                "网盘登录",
+                PanLogin.loggedIn().takeIf { it.isNotEmpty() }?.let { "已登录 ${it.joinToString("、")}" } ?: "夸克、UC、百度、115… 每家分开扫码登录",
+                Modifier.remembered(mem, "pans"),
+                onClick = { nav.openPans() },
             ) { fg -> T("›", 16.sp, fg) }
             Section("播放")
             Row("自动换线路", "解析不出、播放出错或卡住 20 秒，自动换下一条", Modifier.remembered(mem, "auto"), onClick = { Prefs.autoLine = !Prefs.autoLine }) { fg ->

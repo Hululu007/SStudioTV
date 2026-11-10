@@ -372,7 +372,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
                         set.lines.isEmpty() -> set.error ?: "「${Sources.name}」的 ${set.total} 个站点里都没找到《${t.name}》"
                         set.lines.none { indexIn(it) != null } -> "所有线路都还没有「${epText()}」"
                         set.failed.values.any { dev.personal.tv.source.PluginPortal.wantsLogin(it) } ->
-                            "${tried.size} 条线路都播不了；网盘线路要先在「片源 → 插件配置中心」扫码登录"
+                            "${tried.size} 条线路都播不了；网盘线路要先在「设置 → 网盘登录」扫码登录"
                         else -> "${tried.size} 条线路都试过了，都播不了"
                     }
                     return
@@ -428,7 +428,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             val root = generateSequence(x) { it.cause }.last()
             // 插件进程里抛的 PluginError 过 binder 后只剩文字
             (x as? dev.personal.tv.source.PluginError ?: root as? dev.personal.tv.source.PluginError)?.message?.let {
-                why = it.take(48) + if (dev.personal.tv.source.PluginPortal.wantsLogin(it)) "（在「片源 → 插件配置中心」登录）" else ""
+                why = it.take(48) + if (dev.personal.tv.source.PluginPortal.wantsLogin(it)) "（在「设置 → 网盘登录」登录）" else ""
             }
             null
         }
