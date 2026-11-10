@@ -82,6 +82,10 @@ class MenuItem(val label: String, val action: () -> Unit)
  * 不用 navigation-compose：页面少，自己管栈更容易控制焦点回位。
  */
 class Navigator {
+    companion object {
+        /** 当前的导航（debug 广播用） */
+        var current: Navigator? = null
+    }
     val stack = mutableStateListOf<Route>(Route.Main)
     var tab by mutableStateOf(Tab.HOME)
         private set
@@ -161,7 +165,7 @@ val LocalNav = staticCompositionLocalOf<Navigator> { error("no navigator") }
 
 @Composable
 fun AppNav() {
-    val nav = remember { Navigator() }
+    val nav = remember { Navigator().also { Navigator.current = it } }
     val holder = rememberSaveableStateHolder()
     CompositionLocalProvider(LocalNav provides nav) {
         BackHandler(enabled = nav.stack.size > 1) {

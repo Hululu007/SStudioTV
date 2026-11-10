@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.LaunchedEffect
@@ -48,6 +49,8 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
@@ -126,10 +129,15 @@ fun DetailScreen(r: Route.Detail) {
     val simReq = remember { FocusRequester() }
     var inSec2 by remember { mutableStateOf(false) }
     // 选集按哪条线路显示：线路是陆续搜到的，焦点在选集行里时先不换，免得按钮在手底下变了
-    val live = Lines.ref(Lines.get(t.id), p?.line)
+    val live = Lines.ref(Lines.get(t.id), p?.line, t.name)
     var frozen by remember { mutableStateOf<PlayLine?>(null) }
     var epFocus by remember { mutableStateOf(false) }
-    LaunchedEffect(live, epFocus) { if (!epFocus || frozen == null) frozen = live }
+    // 手动换了一套名字（包括换回自动选）马上换
+    val chosen = Lines.chosen(t.id)
+    var lastChosen by remember { mutableStateOf(chosen) }
+    LaunchedEffect(live, epFocus, chosen) {
+        if (!epFocus || frozen == null || chosen != lastChosen) { frozen = live; lastChosen = chosen }
+    }
     val ref = if (epFocus) frozen ?: live else live
 
     BackHandler(enabled = inSec2) { runCatching { playReq.requestFocus() } }
@@ -188,7 +196,9 @@ fun DetailScreen(r: Route.Detail) {
                         Buttons(t, p, ref, mem, r, playReq, epReq, simReq, Modifier.padding(top = 14.dp))
                     }
                     if (hasEpisodes(t, ref)) {
-                        EpisodeRow(t, p, ref, epReq, mem, Modifier.padding(top = 395.dp).onFocusChanged { epFocus = it.hasFocus }) { ep, name -> nav.play(t.id, ep, name) }
+                        val ranking = Lines.get(t.id)?.ranking
+                        val versions = remember(ranking, t.id) { Lines.versions(Lines.get(t.id), t.name) }
+                        EpisodeRow(t, p, ref, epReq, mem, Modifier.padding(top = 395.dp).onFocusChanged { epFocus = it.hasFocus }, versions = versions) { ep, name -> nav.play(t.id, ep, name) }
                     }
                     Row(
                         Modifier.align(Alignment.BottomStart).padding(start = Dimens.SafeH, bottom = 18.dp),
@@ -355,14 +365,20 @@ private fun Buttons(
 /**
  * 选集：看过的变暗，当前集带进度，新出的标「新」，没播出的虚线框。
  * 线路里的分集名字不是序号（综艺的「11.01 上」「加更版」）时，直接按线路里的名字排。
+ * 集数多时标题旁边有分段（「1–30」「31–60」），焦点移上去列表就跳到那一段，按 OK 进去。
+ * [versions]：选集可以换成别的线路的名字显示（详情页用），不止一种时标题旁边有「换一套名字」。
  * onPlay(序号, 名字)：名字为 null 表示按序号。
  */
 @Composable
 fun EpisodeRow(
     t: Title, p: Progress?, line: PlayLine?, curReq: FocusRequester, mem: FocusMemory?,
-    modifier: Modifier = Modifier, onPlay: (Int, String?) -> Unit,
+    modifier: Modifier = Modifier, versions: List<PlayLine> = emptyList(), onPlay: (Int, String?) -> Unit,
 ) {
-    if (line != null && line.episodes.isNotEmpty() && !Eps.numeric(line.episodes, t.name, t.isVariety)) return NamedEpisodeRow(t, p, line, curReq, mem, modifier, onPlay)
+    // 「换一套名字」的焦点放在这里：换完可能从按名字的行变成按序号的行，按钮要接着有焦点
+    val vf = remember { VersionFocus() }
+    val numericLine = line == null || line.episodes.isEmpty() || Eps.numeric(line.episodes, t.name, t.isVariety)
+    val vs = versionChoices(t, line, numericLine, versions)
+    if (!numericLine) return NamedEpisodeRow(t, p, line!!, curReq, mem, modifier, vs, vf, onPlay)
     // 线路里的集数比豆瓣多（第二季接着第一季编号、豆瓣还没更新）：按线路的来
     val lineMax = line?.episodes?.maxOfOrNull { Eps.number(it.name, t.name) ?: 0 } ?: 0
     val aired = maxOf(t.airedEps, lineMax)
@@ -374,10 +390,15 @@ fun EpisodeRow(
         tg?.name?.let { Eps.number(it, t.name) } ?: tg?.ep?.takeIf { tg.name == null } ?: no
     } ?: 1
     val state = rememberLazyListState(initialFirstVisibleItemIndex = (cur - 5).coerceAtLeast(0))
+    val spans = remember(total) { spans(total, 30) { a, b -> "${a + 1}–$b" } }
+    val jump = rememberJump(state)
+    val headReq = remember { FocusRequester() }
     Column(modifier) {
-        Row(Modifier.padding(start = Dimens.SafeH, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        EpHeader(headReq.takeIf { spans.isNotEmpty() || vs.isNotEmpty() }) {
             T("选集", 13.sp, weight = FontWeight.SemiBold)
             T("1–$total", 9.5.sp, Palette.T1, modifier = Modifier.background(Color.White.copy(alpha = 0.14f), RoundedCornerShape(50)).padding(horizontal = 7.dp, vertical = 2.dp))
+            SpanChips(spans, state, headReq) { jump.go(minOf(it, aired - 1).coerceAtLeast(0)) }
+            VersionChip(t, line, vs, vf, curReq, if (spans.isEmpty()) headReq else null)
             t.schedule?.let { T("$it · 已更新至 $aired 集", 9.5.sp, Palette.T3) }
         }
         EdgeScroll {
@@ -398,6 +419,7 @@ fun EpisodeRow(
                     } else {
                         var m = Modifier.size(54.dp, 34.dp)
                         if (ep == cur) m = m.focusRequester(curReq)
+                        if (ep - 1 == jump.at) m = m.focusRequester(jump.req)
                         if (mem != null) m = m.remembered(mem, "ep:$ep")
                         Focusable({ onPlay(ep, null) }, m, corner = 6.dp) { f ->
                             EpChip(f, seen, isCur, isNew, p, Modifier.fillMaxSize()) {
@@ -411,11 +433,14 @@ fun EpisodeRow(
     }
 }
 
-/** 按线路里的分集名字排（综艺）：按钮宽度跟着名字走，聚焦时标题旁边显示完整名字 */
+/**
+ * 按线路里的分集名字排（综艺）：按钮宽度跟着名字走，聚焦时标题旁边显示完整名字。
+ * 正片、加更（抢鲜版、沉浸版、纯享）、花絮（预告、直播回放、路透）分开放，标题旁边切换；默认在正片（上次看的是加更就在加更）。
+ */
 @Composable
 private fun NamedEpisodeRow(
     t: Title, p: Progress?, line: PlayLine, curReq: FocusRequester, mem: FocusMemory?,
-    modifier: Modifier, onPlay: (Int, String?) -> Unit,
+    modifier: Modifier, versions: List<PlayLine>, vf: VersionFocus, onPlay: (Int, String?) -> Unit,
 ) {
     val eps = line.episodes
     val w = namedWatched(t, p, line)
@@ -423,13 +448,44 @@ private fun NamedEpisodeRow(
     val cur = if (w == null) 1 else if (p!!.finishedEp) (Eps.nextAfter(eps, w, t.name).takeIf { it >= 0 } ?: w) + 1 else w + 1
     // 同名的分集（每周都叫「加更版」）：焦点记忆按「名字 + 第几个同名的」记
     val occ = remember(eps) { val seen = HashMap<String, Int>(); eps.map { e -> seen.merge(e.name, 1, Int::plus)!! } }
+    val groups = remember(eps) { eps.indices.groupBy { Eps.group(eps[it].name, t.name) }.toSortedMap() }
+    var g by remember(line.key) { mutableIntStateOf(Eps.group(eps.getOrNull(cur - 1)?.name ?: "", t.name).takeIf { it in groups } ?: groups.firstKey()) }
+    val shown = groups[g] ?: eps.indices.toList()
     var focusedName by remember { mutableStateOf<String?>(null) }
-    val state = rememberLazyListState(initialFirstVisibleItemIndex = (cur - 4).coerceAtLeast(0))
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = (shown.indexOf(cur - 1) - 3).coerceAtLeast(0))
+    val spans = remember(shown, eps) {
+        spans(shown.size, 20) { a, b ->
+            val x = spanLabel(eps[shown[a]].name, t.name)
+            val y = spanLabel(eps[shown[b - 1]].name, t.name)
+            if (x != null && y != null) "$x–$y" else "${a + 1}–$b"
+        }
+    }
+    val jump = rememberJump(state)
+    // 换了分组：列表回到开头（当前这一集在这组里就停在它前面一点）
+    var lastG by remember { mutableIntStateOf(g) }
+    LaunchedEffect(g) {
+        if (g != lastG) { lastG = g; state.scrollToItem((shown.indexOf(cur - 1) - 3).coerceAtLeast(0)) }
+    }
+    // 当前这一集不在显示的这组里（换了组）：「选集」按钮把焦点给这组的第一个
+    val curK = shown.indexOf(cur - 1).let { if (it < 0) 0 else it }
+    val headReq = remember { FocusRequester() }
     Column(modifier) {
-        Row(Modifier.padding(start = Dimens.SafeH, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        // 从上面按钮按下来先落到选中的那个分组 / 分段上；分组按 OK 才换（焦点路过不换，免得列表在手底下变）
+        EpHeader(headReq.takeIf { groups.size > 1 || spans.isNotEmpty() || versions.isNotEmpty() }) {
             T("选集", 13.sp, weight = FontWeight.SemiBold)
-            T("共 ${eps.size} 个", 9.5.sp, Palette.T1, modifier = Modifier.background(Color.White.copy(alpha = 0.14f), RoundedCornerShape(50)).padding(horizontal = 7.dp, vertical = 2.dp))
-            T(focusedName ?: t.schedule.orEmpty(), 9.5.sp, Palette.T3, lines = 1, modifier = Modifier.widthIn(max = 520.dp))
+            if (groups.size > 1) {
+                groups.forEach { (k, v) ->
+                    Chip(
+                        "${Eps.GROUPS[k]} ${v.size}", k == g, { if (g != k) { g = k; jump.reset() } else jump.go(0) },
+                        if (k == g) Modifier.focusRequester(headReq) else Modifier,
+                    )
+                }
+            } else {
+                T("共 ${eps.size} 个", 9.5.sp, Palette.T1, modifier = Modifier.background(Color.White.copy(alpha = 0.14f), RoundedCornerShape(50)).padding(horizontal = 7.dp, vertical = 2.dp))
+            }
+            SpanChips(spans, state, headReq.takeIf { groups.size <= 1 }) { jump.go(it) }
+            VersionChip(t, line, versions, vf, curReq, headReq.takeIf { groups.size <= 1 && spans.isEmpty() })
+            T(focusedName ?: t.schedule.orEmpty(), 9.5.sp, Palette.T3, lines = 1, modifier = Modifier.widthIn(max = 420.dp))
         }
         EdgeScroll {
             LazyRow(
@@ -437,12 +493,14 @@ private fun NamedEpisodeRow(
                 contentPadding = PaddingValues(horizontal = Dimens.SafeH, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
-                itemsIndexed(eps, key = { i, e -> "$i:${e.name}" }) { i, e ->
+                itemsIndexed(shown, key = { _, i -> "$i:${eps[i].name}" }) { k, i ->
+                    val e = eps[i]
                     val ep = i + 1
                     val seen = watched != null && (ep < watched || (ep == watched && p!!.finishedEp))
                     val isCur = watched != null && ep == watched && !p!!.finishedEp
                     var m: Modifier = Modifier
-                    if (ep == cur) m = m.focusRequester(curReq)
+                    if (k == curK) m = m.focusRequester(curReq)
+                    if (k == jump.at) m = m.focusRequester(jump.req)
                     if (mem != null) m = m.remembered(mem, "ep:${e.name}#${occ[i]}")
                     Focusable({ onPlay(ep, e.name) }, m, corner = 6.dp, onFocus = { focusedName = Eps.fullLabel(e.name, t.name) }) { f ->
                         EpChip(
@@ -456,6 +514,120 @@ private fun NamedEpisodeRow(
             }
         }
     }
+}
+
+/** 选集标题那一行：「选集」、分组、分段、换名字，一行排下。焦点从外面进来时落在 [enter]（选中的那个）上 */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+private fun EpHeader(enter: FocusRequester?, content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
+    var m: Modifier = Modifier.padding(start = Dimens.SafeH, bottom = 2.dp)
+    if (enter != null) m = m.focusProperties { this.enter = { enter } }.focusGroup()
+    Row(m, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), content = content)
+}
+
+/** 列表里的一段 [from, to)，按钮上显示 [label] */
+private class Span(val from: Int, val to: Int, val label: String)
+
+/** 超过 1.5 段才分段；最后一段太短的并进前一段 */
+private fun spans(n: Int, size: Int, label: (Int, Int) -> String): List<Span> {
+    if (n <= size * 3 / 2) return emptyList()
+    val starts = (0 until n step size).toMutableList()
+    if (n - starts.last() < size / 3) starts.removeAt(starts.lastIndex)
+    return starts.mapIndexed { k, a -> val b = starts.getOrNull(k + 1) ?: n; Span(a, b, label(a, b)) }
+}
+
+/** 分段按钮上的名字：带日期的用日期（「10.01」），第 N 期用「第N期」，认不出的 null（改用序号） */
+private fun spanLabel(name: String, title: String): String? {
+    val id = Eps.parse(name, title)
+    return when {
+        id.date != null -> id.date.takeLast(4).let { "${it.take(2)}.${it.takeLast(2)}" }
+        id.num != null && id.unit == '期' -> "${id.num}期"
+        else -> null
+    }
+}
+
+/**
+ * 分段按钮：焦点移到别的段上列表滚到那一段（列表已经在这一段里就不动），按 OK 焦点进到那一段的第一个。
+ * [req] 挂在当前所在的那一段上（焦点进标题行时落在这里）
+ */
+@Composable
+private fun SpanChips(spans: List<Span>, state: androidx.compose.foundation.lazy.LazyListState, req: FocusRequester?, onEnter: (Int) -> Unit) {
+    if (spans.isEmpty()) return
+    val scope = rememberCoroutineScope()
+    val at by remember(spans) { androidx.compose.runtime.derivedStateOf { spans.indexOfLast { it.from <= state.firstVisibleItemIndex + 2 }.coerceAtLeast(0) } }
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        spans.forEachIndexed { k, s ->
+            Chip(
+                s.label, k == at, { onEnter(s.from) },
+                if (k == at && req != null) Modifier.focusRequester(req) else Modifier,
+                onFocus = { if (k != at) scope.launch { state.animateScrollToItem(s.from) } },
+            )
+        }
+    }
+}
+
+/**
+ * 能换的几套名字。综艺：按名字分期的线路（按序号的名字用不上），加上现在这条；
+ * 电视剧：一般不给换，除非现在显示的是带副标题的名字、或者手动换过（换到按序号的那套之后还要能换回来）
+ */
+private fun versionChoices(t: Title, line: PlayLine?, numericLine: Boolean, versions: List<PlayLine>): List<PlayLine> {
+    if (line == null || versions.size < 2) return emptyList()
+    val vs = when {
+        t.isVariety -> versions.filter { v -> v.key == line.key || !Eps.numeric(v.episodes, t.name, true) }
+        !numericLine || Lines.chosen(t.id) != null -> versions
+        else -> emptyList()
+    }
+    return if (vs.size > 1) vs else emptyList()
+}
+
+/** 「换一套名字」按钮的焦点：换完以后按钮可能重画（行的样式变了），要把焦点还给它 */
+private class VersionFocus {
+    val req = FocusRequester()
+    var want by mutableStateOf(false)
+}
+
+/** 换一套名字显示选集（别的线路的分集名字），只在详情页有。换回第一套 = 回到自动选 */
+@Composable
+private fun VersionChip(t: Title, line: PlayLine?, versions: List<PlayLine>, vf: VersionFocus, curReq: FocusRequester, enterReq: FocusRequester?) {
+    LaunchedEffect(line?.key, versions.isEmpty()) {
+        if (!vf.want) return@LaunchedEffect
+        vf.want = false
+        withFrameNanos { }
+        // 按钮没了（换回自动以后电视剧不再显示它）：焦点给选集
+        runCatching { vf.req.requestFocus() }.onFailure { runCatching { curReq.requestFocus() } }
+    }
+    if (versions.size < 2 || line == null) return
+    val nav = LocalNav.current
+    val i = versions.indexOfFirst { it.key == line.key }
+    var m = Modifier.focusRequester(vf.req)
+    if (enterReq != null) m = m.focusRequester(enterReq)
+    Chip("换一套名字 ${if (i >= 0) i + 1 else 1}/${versions.size}", false, {
+        val k = (i + 1).mod(versions.size)
+        val next = versions[k]
+        vf.want = true
+        Lines.choose(t.id, if (k == 0) null else next.key)
+        nav.toast("选集按「${next.siteName} · ${next.flag}」的名字显示 · ${next.episodes.size} 个")
+    }, m)
+}
+
+/** 分段跳转：滚到 [at] 那一个，等它画出来再把焦点给它 */
+private class Jump(val req: FocusRequester) {
+    var at by mutableIntStateOf(-1)
+    var tick by mutableIntStateOf(0)
+    fun go(i: Int) { at = i; tick++ }
+    fun reset() { at = -1 }
+}
+
+@Composable
+private fun rememberJump(state: androidx.compose.foundation.lazy.LazyListState): Jump {
+    val j = remember { Jump(FocusRequester()) }
+    LaunchedEffect(j.tick) {
+        if (j.tick == 0 || j.at < 0) return@LaunchedEffect
+        state.scrollToItem(j.at)
+        withFrameNanos { }
+        runCatching { j.req.requestFocus() }
+    }
+    return j
 }
 
 /**

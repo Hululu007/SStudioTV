@@ -56,7 +56,7 @@ keyPassword=…
 
 把 keystore 放在 `signing/` 下。这个目录已经被 `.gitignore` 忽略了。
 
-**预置片源（可选，自用）**：放一个 `app/src/main/assets/presets.json`，首次启动会自动导入：
+**预置片源（可选，自用）**：放一个 `app/presets/presets.json`（已被 `.gitignore` 忽略），启动时会把没导过的导进来。编译时加 `-Ppublic`（`./gradlew assembleRelease -Ppublic`）出的包不带它：
 
 ```json
 [{ "name": "我的源", "url": "http://…" }]

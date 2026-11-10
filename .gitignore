@@ -19,6 +19,7 @@ dist/
 
 # 本地自用：预置片源、种子索引（见 README「自己出包」）
 app/src/main/assets/presets.json
+app/presets/
 app/src/main/assets/search-seed.json
 
 # 早期设计稿（含海报图）

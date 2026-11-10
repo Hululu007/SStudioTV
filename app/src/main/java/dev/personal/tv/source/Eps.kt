@@ -32,7 +32,7 @@ data class EpId(
  */
 object Eps {
     private val QUALITY = Regex(
-        "(?<![a-z0-9])(?:\\d{3,4}[pi]|[248]k(?:hdr)?(?:\\d{2,3}(?:fps|帧)?)?|\\d{2,3}(?:fps|帧)|hdr10\\+?|hdr|dolby|uhd|fhd|hd|bd|tc|ts|web-?dl|hevc|[hx]\\.?26[45]|aac)(?![a-z])" +
+        "(?<![a-z0-9])(?:\\d{3,4}[pi]|1?[02468]bit|[248]k(?:hdr)?(?:\\d{2,3}(?:fps|帧)?)?|\\d{2,3}(?:fps|帧)|hdr10\\+?|hdr|dolby|uhd|fhd|hd|bd|tc|ts|web-?dl|hevc|[hx]\\.?26[45]|aac)(?![a-z])" +
             "|杜比视界|杜比|高清|超清|标清|蓝光|原画|高码率?|低码率?|(?:国语|粤语|英语|普通话|原声|双语)(?:版|中字)?|中英字幕|中文字幕|中字|英字|无删减|未删减|删减版|已完结|完结|大结局|最终[集回话章]?|全集" +
             "|(?<![a-z])(?:end|final)(?![a-z])",
     )
@@ -44,14 +44,36 @@ object Eps {
         "\\d+(?:\\.\\d+)?\\s*[kmgt]i?b(?![a-z])" +
             "|\\.(?:mp4|mkv|ts|m3u8|flv|avi|rmvb|rm|mov|wmv|webm|m4v|mpe?g|iso)(?![a-z0-9])" +
             "|(?:全|共)\\s*\\d+\\s*[集话話期]|\\d+\\s*[集话話期]\\s*全|更新至\\s*\\d+\\s*[集话話期]?" +
-            "|[（(\\[【]\\s*(?:19|20)\\d{2}\\s*[)）\\]】]",
+            "|[（(\\[【]\\s*(?:19|20)\\d{2}\\s*[)）\\]】]" +
+            // 「S01E01.2011.1080p」点号隔开的年份（后面跟着月.日的是日期，不动）
+            "|(?<=[a-z0-9]\\.)(?<!(?<![a-z])(?:ep?|episode|vol|no)\\.)(?:19|20)\\d{2}(?=\\.)(?!\\.\\d{1,2}\\.\\d{1,2}(?!\\d))" +
+            // 网盘重复上传加的时间戳「_1029195914」：9 位以上的数字不会是集号、日期
+            "|(?<!\\d)\\d{9,}(?!\\d)",
         RegexOption.IGNORE_CASE,
+    )
+    /**
+     * 压制组后缀「AAC-AIU.mp4」「H265-CHDWEB.mkv」：编码 / 清晰度后面、扩展名前面全大写的一截。要在转小写之前去掉。
+     * 前面不是编码的不动（「Running.Man-EP05.mp4」「20261022-PLUS.mp4」）
+     */
+    private val RELEASE_GROUP = Regex(
+        "(?<=(?i:aac|ac3|eac3|dts|flac|atmos|ddp?\\d\\.\\d|26[45]|hevc|avc|\\dp|-dl|rip|ray|bit))" +
+            "-(?!(?:EP?\\d|PART|PT\\d|PLUS|LIVE|SP|END|CUT)(?![A-Z]))(?=[A-Z0-9]{2,12}\\.)[A-Z0-9]*[A-Z][A-Z0-9]*" +
+            "(?=\\.(?:mp4|mkv|ts|flv|avi|mov|webm|m4v)(?![A-Za-z0-9]))",
     )
     /** 选集按钮上不用显示的清晰度、编码（「国语版」「普通话版」留着，同一集分版本时要靠它区分） */
     private val LABEL_NOISE = Regex(
-        "(?<![a-z0-9])(?:\\d{3,4}[pi]|[248]k(?:hdr)?|uhd|fhd|hd|bd|web-?dl|hevc|[hx]\\.?26[45]|aac|hdr10\\+?|hdr)(?![a-z])|杜比视界|杜比|高码率?|低码率?",
+        "(?<![a-z0-9])(?:\\d{3,4}[pi]|[248]k(?:hdr)?|1?[02468]bit|uhd|fhd|hd|bd|web-?dl|hevc|[hx]\\.?26[45]|aac|hdr10\\+?|hdr)(?![a-z])|杜比视界|杜比|高码率?|低码率?",
         RegexOption.IGNORE_CASE,
     )
+    /** 网盘文件名开头的英文片名：「Empresses.in.the.Palace.E01」「Running.Man.S01E01」→ 只留集号 */
+    private val EN_TITLE = Regex("^[\\s._\\[\\]-]*(?:[a-z]+[\\s._-]+){1,8}(?=(?:s\\d{1,2}[\\s._-]*)?e(?:p)?[\\s._-]*\\d{1,4}(?!\\d))", RegexOption.IGNORE_CASE)
+    /** 英文片名里带着类型词（「Live EP3」「Plus E02」「Reaction EP1」）的不是片名，留着 */
+    private fun stripEnTitle(s: String): String = EN_TITLE.replace(s) { m ->
+        val low = m.value.lowercase()
+        if (TAGS.any { it.second.containsMatchIn(low) } || WEAK_TAGS.any { it.second.containsMatchIn(low) }) m.value else ""
+    }
+    /** 「EP.01」「E_01」：集号前面的分隔符去掉，好认 */
+    private val EP_SEP = Regex("(?<![a-z])(ep?|episode)[\\s._-]+(?=\\d)", RegexOption.IGNORE_CASE)
     /** 括号 / 分隔符清掉内容后留下的空壳：「[]」「【 （） 】」「_ .」 */
     private val EMPTY_BRACKETS = Regex("[\\[(（【《<「]\\s*[)）\\]】》>」]")
     private val EDGE = " -_·•.,，。:：;；|/\\~～"
@@ -70,7 +92,22 @@ object Eps {
         val loose = synchronized(titleRes) {
             titleRes.getOrPut(cjk) { Regex(cjk.map { Regex.escape(it.toString()) }.joinToString("[^\\u4e00-\\u9fff\\d]{0,4}")) }
         }
-        s = BRACKET.replace(s) { m -> if (loose.containsMatchIn(m.value)) " " else m.value }
+        // 片名在括号里（「【H 后宫·甄嬛传】」）：去掉片名后剩下的「【H 】」是空壳
+        var removed = BRACKET.findAll(name).any { it.value.contains(title, ignoreCase = true) }
+        s = BRACKET.replace(s) { m -> if (loose.containsMatchIn(m.value)) { removed = true; " " } else m.value }
+        // 更狠的打乱：「【H‑后‑H‑友‑Q】」「【H【后!＠会!＃友!＆其月】】」只留了片名里的两三个字，其余换成拼音首字母；
+        // 括号里没有数字、有片名里至少两个字的整个去掉，去完剩下的「【H 】」这种空壳（只有一两个字母）也去掉。
+        // 括号里是类型词、上下的不动（片名「幕后之王」的「【幕后花絮】」、「【兄弟团纯享】」「[SP]」）
+        repeat(2) {
+            s = BRACKET.replace(s) { m ->
+                val c = m.groupValues[1]
+                val low = c.lowercase()
+                if (TAGS.any { it.second.containsMatchIn(low) } || PART.containsMatchIn(m.value)) return@replace m.value
+                val hits = cjk.toSet().count { it in c }
+                val shell = removed && c.none { it in '\u4e00'..'\u9fff' || it.isDigit() } && c.count { it.isLetter() } <= 2
+                if (c.none { it.isDigit() } && hits >= 2 || shell) { removed = true; " " } else m.value
+            }
+        }
         return loose.replace(s, " ")
     }
     private val titleRes = HashMap<String, Regex>()
@@ -83,6 +120,10 @@ object Eps {
     private val DATE_QI = Regex("(?<![\\d第])([01]\\d)([0-3]\\d)\\s*期")
     private val TAGS = listOf(
         "加更" to Regex("加更版?|加长版?|(?<![a-z])plus(?![a-z])|超前点映"),
+        "抢鲜" to Regex("抢鲜版?|抢先版|会员版"),
+        "沉浸" to Regex("沉浸版?|沉浸式"),
+        "直播" to Regex("直播回放|直播版|直播全程"),
+        "路透" to Regex("路透"),
         "先导" to Regex("先导片?|先行版?"),
         "预告" to Regex("预告片?|抢先看|看点|前瞻"),
         "花絮" to Regex("花絮|幕后|拍摄日记|制作特辑"),
@@ -92,15 +133,35 @@ object Eps {
         "精华" to Regex("精华版?|精编版?|集锦|回顾|(?<![a-z])cut(?![a-z])"),
         "特别" to Regex("特别篇|特别版|特辑|番外篇?|(?<![a-z])sp(?![a-z])"),
     )
+    /**
+     * 也常出现在正片副标题里的类型词（「第12集 直播事故」「第08集 海报风波」「第3期 直播带货大战」）：
+     * 名字里写明了第几集 / 第几期的不算
+     */
+    private val WEAK_TAGS = listOf(
+        "直播" to Regex("直播|(?<![a-z])live(?![a-z])"),
+        "路透" to Regex("官宣|物料|海报|(?<![a-z])reaction(?![a-z])|解说|二创|混剪"),
+    )
+    private val EP_MARK = Regex("第\\s*[\\d零一二两三四五六七八九十百]+\\s*[集话話回期]|(?<![a-z])(?:ep?|episode)\\s*\\d")
+
     /** 自动下一集时跳过、数正片时不算的 */
-    val EXTRA = setOf("预告", "花絮", "彩蛋", "纯享", "陪看", "精华")
+    val EXTRA = setOf("预告", "花絮", "彩蛋", "纯享", "陪看", "精华", "直播", "路透")
+    /** 同一期正片的另一个剪辑版本：看正片时自动下一集跳过 */
+    val ALT = setOf("抢鲜", "沉浸")
+    /** 选集分组：0 正片、1 加更 / 别的完整版本（抢鲜、沉浸、陪看）、2 纯享、花絮、预告这类片段。选集行按组显示，不混在一起 */
+    val GROUPS = listOf("正片", "加更", "花絮")
+    fun group(id: EpId): Int = when (id.tag) {
+        "", "先导", "特别" -> 0
+        "加更", "抢鲜", "沉浸", "陪看" -> 1
+        else -> 2
+    }
+    fun group(name: String, title: String = "") = group(parse(name, title))
     private val NUM = Regex("(第|episode|ep|e(?=\\d)|vol\\.?|no\\.?)?\\s*(\\d+(?:\\.\\d+)?(?:\\s*[-~～至]\\s*\\d+)?|[零一二两三四五六七八九十百]+)\\s*([集期话話回章])?")
     private val PART = Regex("[（(\\[【]\\s*([上中下一二三四])\\s*[)）\\]】]|(?<![\\u4e00-\\u9fff])([上中下])(?:集|篇|半场|半|部)?(?![\\u4e00-\\u9fff])|(?<![a-z])(?:part|pt)\\.?\\s*(\\d)")
     private val PUNCT = Regex("[\\s_\\-·•.,，。:：;；|/\\\\()（）\\[\\]【】《》<>「」『』\"'~～!！?？#+]")
     private val UNITS = Regex("[第集期话話回章]")
 
     private val cache = object : LinkedHashMap<String, EpId>(256, 0.75f, true) {
-        override fun removeEldestEntry(e: MutableMap.MutableEntry<String, EpId>?) = size > 6000
+        override fun removeEldestEntry(e: MutableMap.MutableEntry<String, EpId>?) = size > 30000
     }
 
     fun validMd(m: Int, d: Int) = m in 1..12 && d in 1..31
@@ -115,9 +176,11 @@ object Eps {
     }
 
     private fun doParse(name: String, title: String): EpId {
-        var s = name.lowercase().map { if (it in '０'..'９') '0' + (it - '０') else it }.joinToString("")
+        var s = RELEASE_GROUP.replace(name, "").lowercase().map { if (it in '０'..'９') '0' + (it - '０') else it }.joinToString("")
         s = stripTitle(s, title.lowercase())
         s = FILE_NOISE.replace(s, " ")
+        s = stripEnTitle(s)
+        s = EP_SEP.replace(s, "$1")
         s = QUALITY.replace(s, " ")
         s = SEASON.replace(s, " ")
 
@@ -138,10 +201,12 @@ object Eps {
             }
         }
 
+        // 好几个类型词都有时取第一个；但带着纯享、花絮这类的就是片段（「先导片·沙滩小黑脚纯享」不是先导片）
         var tag = ""
-        for ((t, re) in TAGS) {
+        val marked = EP_MARK.containsMatchIn(s)
+        for ((t, re) in if (marked) TAGS else TAGS + WEAK_TAGS) {
             if (re.containsMatchIn(s)) {
-                if (tag.isEmpty()) tag = t
+                if (tag.isEmpty() || t in EXTRA && tag !in EXTRA) tag = t
                 s = re.replace(s, " ")
             }
         }
@@ -312,7 +377,8 @@ object Eps {
         if (i !in eps.indices) return -1
         val cur = parse(eps[i].name, title)
         for (j in i + 1 until eps.size) {
-            if (cur.extra || !parse(eps[j].name, title).extra) return j
+            val n = parse(eps[j].name, title)
+            if (cur.extra || !n.extra && (n.tag !in ALT || cur.tag in ALT)) return j
         }
         return -1
     }
@@ -340,8 +406,11 @@ object Eps {
     fun clean(name: String, title: String = ""): String {
         var s = name.trim()
         s = stripTitle(s, title)
+        s = RELEASE_GROUP.replace(s, "")
         s = FILE_NOISE.replace(s, " ")
         s = LABEL_NOISE.replace(s, " ")
+        s = stripEnTitle(s)
+        s = EP_SEP.replace(s, "$1")
         s = SEASON_ANY.replace(s, " ")
         repeat(3) { s = EMPTY_BRACKETS.replace(s, " ") }
         s = s.replace(Regex("\\s+"), " ").trim { it in EDGE }.trim()
@@ -363,8 +432,10 @@ object Eps {
             val m = DATE_FULL.find(low) ?: DATE_MD.find(low) ?: DATE_QI.find(low)
             if (m != null) {
                 val d = id.date
-                val rest = s.removeRange(m.range).replace("第", "").replace("期", "")
+                // 「20261022(第1期)」→「10.22 第1期」；只剩「第」「期」这种零头的不要
+                val rest = s.removeRange(m.range)
                     .trim(' ', '-', '_', '·', '(', ')', '（', '）', '[', ']', '【', '】', ':', '：')
+                    .let { if (it.all { c -> c in "第期 " }) "" else it }
                 return "${d.substring(d.length - 4, d.length - 2)}.${d.takeLast(2)}" + if (rest.isNotEmpty()) " $rest" else ""
             }
         }
@@ -373,6 +444,8 @@ object Eps {
         // 电视剧带副标题：「第1话 任务1」「EP01 任务1」→「1 任务1」（综艺的「第3期」不动）
         EP_HEAD.find(s)?.let { m ->
             val rest = s.substring(m.range.last + 1).trim { it in EDGE }.trim()
+            // 只有「E01」「EP01」：就是第几集
+            if (rest.isEmpty() && !s.startsWith("第")) return normNum(m.groupValues[2])
             if (rest.isNotEmpty() && TAGS.none { it.second.containsMatchIn(rest.lowercase()) }) {
                 return normNum(m.groupValues[1].ifEmpty { m.groupValues[2] }) + " " + rest
             }
@@ -424,7 +497,7 @@ object Eps {
         val first = raw.firstOrNull { it != null }
         var last: Pair<Int, Double>? = null
         val keys = raw.map { k -> (k ?: last ?: first).also { last = it } }
-        fun tagRank(t: String) = when (t) { "" -> 1; "先导" -> 0; "加更" -> 2; else -> 3 }
+        fun tagRank(t: String) = when (t) { "" -> 1; "先导" -> 0; "加更" -> 2; in ALT -> 3; else -> 4 }
         val order = eps.indices.sortedWith(
             compareBy<Int, Pair<Int, Double>?>(nullsLast(cmp)) { keys[it] }
                 .thenBy { if (raw[it] == null) 1 else 0 }
@@ -433,4 +506,101 @@ object Eps {
         )
         return order.map { eps[it] }
     }
+
+    /**
+     * 跨线路比对用的粗键：只看是哪一天 / 第几期 / 第几集，不管上下、版本、嘉宾名。
+     * 「d」日期、「q」第 N 期、「n」第 N 集；认不出的 null。
+     */
+    fun coarse(id: EpId, full: Boolean = false): String? = when {
+        id.date != null -> "d" + if (full && id.date.length == 8) id.date else id.date.takeLast(4)
+        id.num != null && id.unit == '期' -> "q" + id.num
+        id.num != null && id.date == null -> "n" + id.num
+        else -> null
+    }
+
+    /** 一条线路的评分明细，[value] 越大越适合拿来显示选集 */
+    /**
+     * [good] 对得上别的站的集、[fresh] 比别人新的、[bad] 对不上的；[dup] 名字一模一样重复的；
+     * [rich] 同一天分了上下期、加更这些（不超过各站一般的条数）；[excess] 同一天的条数比各站一般的多出来的（同一份名单换个写法又放一遍）；
+     * [vague] 名字只有日期、看不出是什么的；[noisy] 按钮上是一长串英文的（「Empresses.in.the.Palace.S01E01」这种网盘文件名）
+     */
+    data class Score(val good: Int, val fresh: Int, val bad: Int, val dup: Int, val rich: Int, val excess: Int = 0, val vague: Int = 0, val noisy: Int = 0) {
+        val value get() = good * 10 + fresh * 5 - bad * 6 - dup * 4 - excess * 2 + minOf(rich, good) - minOf(vague, 5) - minOf(noisy, good + 1) * 2
+    }
+
+    /**
+     * 给各条线路打分，选「选集按哪条显示」用。[lines]：(站点 key, 分集)。
+     * 同一集要有好几个站都有（按站点数，一个站的多个来源只算一次）才算数：
+     * 「相关」里的反应视频、拿回顾特辑日期当正片的、把「第01集」和「20261029下」两套名字混在一起的线路，
+     * 多出来的那些对不上别的站，扣分；比大家新的几集不扣（更新快的站）。
+     * 同一套名字里，分了上下期、带加更的更全，加一点；一模一样的名字重复好几遍的扣分。
+     */
+    fun score(lines: List<Pair<String, List<Episode>>>, title: String = ""): List<Score> =
+        scoreInfo(lines.map { (site, eps) -> site to LineInfo(eps, title) })
+
+    /** 一条线路打分要用的东西，每条线路只算一次（线路是陆续搜到的，每来一条都要重排） */
+    class LineInfo(eps: List<Episode>, title: String) {
+        val ids = eps.map { parse(it.name, title) }
+        /** 名字一模一样（去掉清晰度、文件大小后）的重复条数 */
+        val dup = eps.map { clean(it.name, title) }.let { it.size - it.distinct().size }
+        /** 按钮上一长串英文字母的个数 */
+        val noisy = eps.count { e -> fullLabel(e.name, title).count { it.code < 0x80 && it.isLetter() } >= 6 }
+        /** 正片的显示名字连起来：名字一样的线路算同一种显示方式 */
+        val sig: String by lazy { eps.filterIndexed { k, _ -> group(ids[k]) == 0 }.joinToString("\u0000") { label(it.name, title) } }
+    }
+
+    fun scoreInfo(lines: List<Pair<String, LineInfo>>): List<Score> {
+        val ids = lines.map { it.second.ids }
+        // 所有站的日期都带年份时按整个日期比（跨年：「20270101」比「1225」新，不是旧）
+        val full = ids.all { l -> l.all { it.date == null || it.date.length == 8 } }
+        fun coarse(id: EpId) = coarse(id, full)
+        val main = ids.map { l -> l.filter { !it.extra }.mapNotNull { coarse(it) }.toSet() }
+        // 只写了日期的（「20260905」），别的站标明了是回顾特辑、花絮、彩蛋，又没有哪个站给这天起过正片的名字：
+        // 这天不是正片，光写日期的线路把它当正片了（实测《现在就出发》四季：九月的回顾特辑、每周四的花絮特辑）
+        fun bare(id: EpId) = id.date != null && id.tag.isEmpty() && id.part == 0 && id.rest.isEmpty()
+        val named = HashMap<String, HashSet<String>>()
+        val extraOnly = HashMap<String, HashSet<String>>()
+        lines.forEachIndexed { i, (site, _) ->
+            ids[i].forEach { id -> if (!id.extra && !bare(id)) coarse(id)?.takeIf { it[0] == 'd' }?.let { named.getOrPut(it) { HashSet() } += site } }
+            ids[i].filter { it.extra }.mapNotNull { coarse(it) }.filter { it[0] == 'd' && it !in main[i] }
+                .forEach { extraOnly.getOrPut(it) { HashSet() } += site }
+        }
+        val notMain = extraOnly.filter { (k, v) -> v.size >= minOf(2, lines.size) && named[k].isNullOrEmpty() }.keys
+        val keys = main.map { it - notMain }
+        val support = HashMap<String, HashSet<String>>()
+        lines.forEachIndexed { i, (site, _) -> keys[i].forEach { support.getOrPut(it) { HashSet() } += site } }
+        val sites = lines.map { it.first }.distinct().size
+        val need = if (sites <= 2) 1 else maxOf(2, (sites * 0.15).toInt())
+        // 每条线路里每一天（每一期）有几个正片；各站一般是几个（中位数）
+        val counts = ids.indices.map { i -> ids[i].filter { !it.extra }.mapNotNull { coarse(it) }.filter { it in keys[i] }.groupingBy { it }.eachCount() }
+        val typical = HashMap<String, Int>()
+        counts.flatMap { it.entries }.groupBy({ it.key }, { it.value }).forEach { (k, v) -> typical[k] = v.sorted()[v.size / 2] }
+        return lines.indices.map { i ->
+            val ks = keys[i]
+            // 一条线路里混着两套编号（日期 / 期号 / 集号）时，少的那套算对不上
+            val kinds = ks.groupBy { it[0] }
+            val top = kinds.maxByOrNull { (k, v) -> v.count { (support[it]?.size ?: 0) >= need } * 1000 + v.size + if (k == 'd') 1 else 0 }?.key
+            var good = 0; var fresh = 0; var bad = main[i].count { it in notMain }
+            for ((kind, v) in kinds) {
+                if (kind != top) { bad += v.size; continue }
+                val ok = v.filter { (support[it]?.size ?: 0) >= need }
+                // 一集都对不上别人的，没有「比别人新」可言；新出的也就最近几集，多了是别的东西
+                val newest = ok.maxOfOrNull { ord(it) } ?: Double.POSITIVE_INFINITY
+                val cap = maxOf(2, ok.size / 4)
+                good += ok.size
+                for (k in v) if ((support[k]?.size ?: 0) < need) { if (ord(k) > newest && fresh < cap) fresh++ else bad++ }
+            }
+            // 重复按显示的名字算：同一天的「第1期」「第2期」键一样，但不是重复
+            val l = ids[i]
+            val dup = lines[i].second.dup
+            val rich = counts[i].entries.sumOf { (k, n) -> minOf(n, typical[k] ?: 1) - 1 }
+            val excess = counts[i].entries.sumOf { (k, n) -> (n - maxOf(typical[k] ?: 1, 1)).coerceAtLeast(0) }
+            // 日期后面只跟一个光秃秃的序号（「20261022-01」），不如「20261022第1期」好认
+            // 只有日期的也一样（同一天上下期、加更都叫「20261012」，看不出是什么）
+            val vague = l.count { it.date != null && !it.extra && (bare(it) || it.rest.isNotEmpty() && it.rest.all { c -> c.isDigit() }) }
+            Score(good, fresh, bad, dup, rich, excess, vague, lines[i].second.noisy)
+        }
+    }
+
+    private fun ord(k: String): Double = k.drop(1).substringBefore('-').toDoubleOrNull() ?: 0.0
 }

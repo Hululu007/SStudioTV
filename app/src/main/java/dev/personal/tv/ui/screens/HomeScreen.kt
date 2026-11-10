@@ -287,7 +287,7 @@ internal fun restText(t: Title, p: Progress): String? {
     if (!t.isEpisodic) return null
     val cur = p.episodeNo(t.name)
     if (p.isNamed(t.name) || cur == null) {
-        val eps = Lines.ref(Lines.get(t.id), p.line)?.episodes ?: return null
+        val eps = Lines.ref(Lines.get(t.id), p.line, t.name)?.episodes ?: return null
         val i = p.epName?.let { Eps.indexOf(eps, it, t.name) } ?: -1
         if (i < 0) return null
         val rest = Eps.mainCount(eps.drop(i + 1), t.name)
@@ -306,7 +306,7 @@ internal fun restText(t: Title, p: Progress): String? {
 
 /** 看完了这一集就播下一集，否则接着这一集；线路搜过就按线路里的名字找下一集 */
 internal fun resumeTarget(t: Title, p: Progress): Target? =
-    Resume.target(t, p, Lines.ref(Lines.get(t.id), p.line)?.episodes)
+    Resume.target(t, p, Lines.ref(Lines.get(t.id), p.line, t.name)?.episodes)
 
 @Composable
 private fun ContinueCard(t: Title, p: Progress, modifier: Modifier, onFocus: () -> Unit) {

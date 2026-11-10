@@ -14,8 +14,8 @@ import kotlinx.coroutines.withContext
 
 /**
  * 片源（影视仓配置）：可以存好几个，同一时间用一个。
- * App 不自带任何片源。自己编译时可以放一个 assets/presets.json（[{"name":"…","url":"…"}]，已在 .gitignore 里），
- * 第一次启动会把它导进来。
+ * App 不自带任何片源。自己编译时可以放一个 app/presets/presets.json（[{"name":"…","url":"…"}]，已在 .gitignore 里），
+ * 启动时把没导过的导进来；加 -Ppublic 编译的包不带它。
  */
 object Sources {
     private const val TAG = "Sources"
@@ -43,13 +43,24 @@ object Sources {
             // 老版本只存了一个 name/url
             val oldUrl = prefs.getString("url", null)
             if (oldUrl != null) list += Entry(prefs.getString("name", null) ?: oldUrl, oldUrl)
-            runCatching {
-                ctx.assets.open("presets.json").bufferedReader().use { gson.fromJson(it, Array<Entry>::class.java) }
-            }.getOrNull()?.forEach { e -> if (list.none { it.url == e.url }) list += e }
-            save()
         }
+        importPresets(ctx)
         val cur = prefs.getString("url", null)
         (list.firstOrNull { it.url == cur } ?: list.firstOrNull())?.let { name = it.name; url = it.url }
+    }
+
+    /**
+     * 自己出的包里预置的片源：没见过的加进来（新版本多了几个也会加），删掉过的不再加回来。
+     * 公开发布的包里没有 presets.json，什么都不做。
+     */
+    private fun importPresets(ctx: Context) {
+        val presets = runCatching {
+            ctx.assets.open("presets.json").bufferedReader().use { gson.fromJson(it, Array<Entry>::class.java) }
+        }.getOrNull()
+        val seen = prefs.getStringSet("presetsSeen", null)?.toMutableSet() ?: list.map { it.url }.toMutableSet()
+        presets?.forEach { e -> if (seen.add(e.url) && list.none { it.url == e.url }) list += e }
+        prefs.edit().putStringSet("presetsSeen", seen).apply()
+        save()
     }
 
     suspend fun config(): TvConfig = lock.withLock {

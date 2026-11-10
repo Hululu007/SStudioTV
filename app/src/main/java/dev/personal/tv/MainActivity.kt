@@ -32,6 +32,15 @@ class MainActivity : ComponentActivity() {
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
             labReceiver = object : BroadcastReceiver() {
                 override fun onReceive(c: Context, i: Intent) {
+                    // --es open 片名：豆瓣搜，打开第一个结果的详情页（--ei pick 选第几个）
+                    i.getStringExtra("open")?.let { q ->
+                        lifecycleScope.launch {
+                            val r = runCatching { dev.personal.tv.data.Catalog.search(q, remote = true) }.getOrDefault(emptyList())
+                            android.util.Log.i("Lab", "open「$q」→ ${r.take(5).joinToString { "${it.name}(${it.year})" }}")
+                            r.getOrNull(i.getIntExtra("pick", 0))?.let { dev.personal.tv.ui.Navigator.current?.openDetail(it.id) }
+                        }
+                        return
+                    }
                     val cfg = i.getStringExtra("cfg") ?: dev.personal.tv.source.Sources.url ?: return
                     i.getStringExtra("purl")?.let { u ->
                         lifecycleScope.launch { Lab.parseTest(applicationContext, cfg, i.getStringExtra("flag") ?: "qq", u, i.getBooleanExtra("play", false)) }

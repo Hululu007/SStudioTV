@@ -15,8 +15,8 @@ android {
         applicationId = "com.sstudio.piandan"
         minSdk = 23
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.7.9"
+        versionCode = 17
+        versionName = "0.8.0"
         resValue("string", "app_name", "SStudioTV")
     }
 
@@ -32,6 +32,9 @@ android {
             keyPassword = signProps.getProperty("keyPassword")
         }
     }
+
+    // 预置片源（app/presets/presets.json，不进仓库）只打进自己测的包；-Ppublic 出公开发布的包，不带
+    if (!project.hasProperty("public")) sourceSets["main"].assets.srcDir("presets")
 
     buildTypes {
         // debug 也用同一把签名：电视上 debug / release 可以互相覆盖安装

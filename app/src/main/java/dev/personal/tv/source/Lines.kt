@@ -47,7 +47,7 @@ data class PlayLine(
 }
 
 /** 一部片的线路搜索状态，界面直接读 */
-class LineSet(val titleId: String) {
+class LineSet(val titleId: String, val title: String = "") {
     val lines = mutableStateListOf<PlayLine>()
     var searched by mutableIntStateOf(0)
     var total by mutableIntStateOf(0)
@@ -60,6 +60,15 @@ class LineSet(val titleId: String) {
     val doneSites = HashSet<String>()
     /** 因为网络错误（连不上、超时）没搜成的站点数 */
     var netErrors = 0
+    /** 按 [Eps.scoreInfo] 排好的线路和分数（后台算，搜到新线路、有线路播放失败时重算）；刚搜到的线路可能还没排进来 */
+    var ranking by mutableStateOf<List<Pair<PlayLine, Eps.Score>>>(emptyList())
+        internal set
+    internal var rankJob: kotlinx.coroutines.Job? = null
+    internal var rankDirty = false
+    /** 算 [ranking] 时失败过几条线路（失败的排后面，同分时影响先后） */
+    internal var rankFailed = 0
+    /** 每条线路拆好的分集名字（打分用），线路 key → */
+    internal val infos = HashMap<String, Eps.LineInfo>()
 }
 
 /**
@@ -105,7 +114,7 @@ object Lines {
             val keep = !s.done || (s.error == null && age < if (s.lines.isEmpty()) 5 * 60_000 else 30 * 60_000)
             if (!force && keep) return s
         }
-        val set = LineSet(t.id)
+        val set = LineSet(t.id, t.name)
         sets[t.id] = set
         val app = ctx.applicationContext
         scope.launch { search(app, t, set) }
@@ -130,9 +139,62 @@ object Lines {
      * 选集按这条线路显示：正片最全的（综艺有的站有加更、上下期，有的站没有；夹了上百条花絮、纯享的不算多），一样多时上次播的那条优先。
      * 播放时按名字到各条线路里找同一集，所以显示哪条都能播。
      */
-    fun ref(set: LineSet?, lastKey: String?): PlayLine? {
+    @Suppress("UNUSED_PARAMETER")
+    fun ref(set: LineSet?, lastKey: String?, title: String = ""): PlayLine? {
         if (set == null) return null
-        return ordered(set, lastKey, emptyList(), pinned = true).maxByOrNull { Eps.mainCount(it.episodes) }
+        choice[set.titleId]?.let { k -> set.lines.firstOrNull { it.key == k }?.let { return it } }
+        val r = ranked(set)
+        // 还没排好（刚搜到第一条）：先按播放顺序
+        val best = r.firstOrNull() ?: return set.lines.firstOrNull { it.key == lastKey } ?: ordered(set, null, emptyList()).firstOrNull()
+        // 上次播的那条接着用（选集名字跟上次看的一样），但不能少集：对得上的集数不比最好的少，其余的（名字好不好认）差一点没关系
+        val last = r.firstOrNull { it.first.key == lastKey } ?: return best.first
+        val (l, b) = last.second to best.second
+        return if (l.good + l.fresh >= b.good + b.fresh && l.value >= b.value - maxOf(10, b.value / 8)) last.first else best.first
+    }
+
+    /** 手动选的「选集按哪条线路显示」：片子 id → 线路 key。只在这次打开 App 里有效 */
+    private val choice = mutableStateMapOf<String, String>()
+
+    fun chosen(titleId: String): String? = choice[titleId]
+
+    fun choose(titleId: String, lineKey: String?) {
+        if (lineKey == null) choice.remove(titleId) else choice[titleId] = lineKey
+    }
+
+    /**
+     * 选集可以按哪几种名字显示：分数最高的几条线路，名字一模一样的只留一条（同一个站的几个来源常常一样）。
+     * 第一个是自动选的。
+     */
+    fun versions(set: LineSet?, title: String = "", max: Int = 6): List<PlayLine> {
+        if (set == null) return emptyList()
+        val seen = HashSet<String>()
+        return ranked(set).map { it.first }.filter { l -> seen.add(info(set, l, title).sig) }.take(max)
+    }
+
+    private fun info(set: LineSet, l: PlayLine, title: String): Eps.LineInfo =
+        set.infos.getOrPut(l.key) { Eps.LineInfo(l.episodes, title) }
+
+    /** 排好的线路；过时了（多了线路、有线路播放失败）就在后台重排，排好之前先用旧的 */
+    private fun ranked(set: LineSet): List<Pair<PlayLine, Eps.Score>> {
+        val r = set.ranking
+        if (r.size != set.lines.size || set.rankFailed != set.failed.size) rerank(set)
+        return r
+    }
+
+    /** 后台重排（几十条线路、每条上百集，放主线程会卡）；正在排的时候又要排，排完再来一遍 */
+    private fun rerank(set: LineSet) {
+        if (set.rankJob?.isActive == true) { set.rankDirty = true; return }
+        set.rankJob = scope.launch(Dispatchers.Main) {
+            do {
+                set.rankDirty = false
+                set.rankFailed = set.failed.size
+                // 同分时按播放顺序（优先站点、直链在前）
+                val ord = ordered(set, null, emptyList())
+                val inf = ord.map { it.siteKey to info(set, it, set.title) }
+                val sc = withContext(Dispatchers.Default) { Eps.scoreInfo(inf) }
+                set.ranking = ord.indices.sortedByDescending { sc[it].value }.map { ord[it] to sc[it] }
+            } while (set.rankDirty)
+        }
     }
 
     private suspend fun search(ctx: Context, t: Title, set: LineSet) {
@@ -172,6 +234,17 @@ object Lines {
         }
         set.done = true
         Log.i(TAG, "${t.name} · ${set.lines.size} 条线路 · ${set.searched}/${set.total} 站 · ${System.currentTimeMillis() - t0}ms")
+        if (ctx.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            val all = set.lines.toList()
+            val sc = Eps.scoreInfo(all.map { it.siteKey to info(set, it, t.name) })
+            val r = ref(set, null, t.name)?.key
+            all.indices.sortedByDescending { sc[it].value }.forEach { k ->
+                val l = all[k]
+                val n = l.episodes.map { it.name }
+                if (sc[k].noisy > 0) Log.d("LinesDump", "raw: " + n.take(3).joinToString(" ¦ "))
+                Log.d("LinesDump", "${sc[k].value} ${sc[k]}|${if (l.key == r) "REF|" else ""}${l.siteName}|${l.flag}|${n.size}|${(n.take(6).map { Eps.label(it, t.name) } + listOf("…") + n.takeLast(6).map { Eps.label(it, t.name) }).joinToString(" ¦ ")}")
+            }
+        }
         if (t.isEpisodic && set.lines.isNotEmpty()) {
             // 豆瓣还没更新集数时按线路算；取第二多的，免得一个站把花絮也算进去
             // 综艺按名字分期（上下期、加更），条数不等于集数，不拿来算
@@ -195,15 +268,25 @@ object Lines {
             if (generateSequence(e) { it.cause }.take(5).any { it is java.io.IOException }) set.netErrors++
             null
         } ?: return
-        for (v in vods) {
-            for (f in v.flags) {
-                if (f.episodes.isEmpty()) continue
-                // 电影只要一集的来源；剧集的来源只有一集多半是预告
-                if (!t.isEpisodic && f.episodes.size > 3) continue
-                if (t.isEpisodic && f.episodes.size == 1 && (t.totalEps > 1 || t.airedEps > 1)) continue
-                val line = PlayLine(s.key, s.name, f.name, v.name, v.remarks, Eps.ascending(Eps.trimCommon(f.episodes), t.name))
-                if (set.lines.none { it.key == line.key }) set.lines.add(line)
+        // 排序、拆分集名字（打分用）都是正则，几十条线路、每条上百集，放到后台算，别卡界面
+        val built = withContext(Dispatchers.Default) {
+            vods.flatMap { v ->
+                v.flags.filter { f ->
+                    // 电影只要一集的来源；剧集的来源只有一集多半是预告
+                    f.episodes.isNotEmpty() && !(!t.isEpisodic && f.episodes.size > 3) &&
+                        !(t.isEpisodic && f.episodes.size == 1 && (t.totalEps > 1 || t.airedEps > 1))
+                }.map { f ->
+                    val line = PlayLine(s.key, s.name, f.name, v.name, v.remarks, Eps.ascending(Eps.trimCommon(f.episodes), t.name))
+                    line to Eps.LineInfo(line.episodes, t.name).also { it.sig }
+                }
             }
         }
+        for ((line, info) in built) {
+            if (set.lines.none { it.key == line.key }) {
+                set.infos[line.key] = info
+                set.lines.add(line)
+            }
+        }
+        if (built.isNotEmpty()) rerank(set)
     }
 }
