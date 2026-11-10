@@ -127,7 +127,17 @@ class JarSite(private val jar: String, private val md5: String?, private val cfg
 
     override fun home() = VodJson.page(call("home"))
     override fun category(tid: String, page: Int) = VodJson.page(call("category", tid, "$page"))
-    override fun search(wd: String) = VodJson.page(call("search", wd)).list
+    override fun search(wd: String): List<Vod> {
+        // 有的插件（摸鱼儿）刚加载时异步做宿主验证，验证完之前每个站点只回一条「宿主验证未就绪，请稍候」：等一下再搜
+        repeat(3) {
+            val r = VodJson.page(call("search", wd)).list
+            if (!notReady(r)) return r
+            Thread.sleep(3500)
+        }
+        return emptyList()
+    }
+
+    private fun notReady(r: List<Vod>) = r.size == 1 && r[0].let { "${it.name}${it.remarks}" }.let { "未就绪" in it || "验证中" in it }
     override fun detail(id: String) = VodJson.page(call("detail", id)).list.firstOrNull()
     override fun play(flag: String, id: String) = VodJson.play(call("play", flag, id, *vipFlags.toTypedArray()), id)
 

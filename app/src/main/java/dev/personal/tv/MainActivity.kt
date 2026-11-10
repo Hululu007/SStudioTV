@@ -11,6 +11,8 @@ import androidx.activity.compose.setContent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import dev.personal.tv.source.Lab
+import dev.personal.tv.source.scan
+import dev.personal.tv.source.dump
 import dev.personal.tv.spider.SpiderClient
 import dev.personal.tv.ui.AppNav
 import dev.personal.tv.ui.theme.AppTheme
@@ -41,9 +43,19 @@ class MainActivity : ComponentActivity() {
                         }
                         return
                     }
+                    // --es go pans：直接打开网盘登录页
+                    if (i.getStringExtra("go") == "pans") { dev.personal.tv.ui.Navigator.current?.openPans(); return }
                     val cfg = i.getStringExtra("cfg") ?: dev.personal.tv.source.Sources.url ?: return
                     i.getStringExtra("purl")?.let { u ->
                         lifecycleScope.launch { Lab.parseTest(applicationContext, cfg, i.getStringExtra("flag") ?: "qq", u, i.getBooleanExtra("play", false)) }
+                        return
+                    }
+                    i.getStringExtra("dump")?.let { k ->
+                        lifecycleScope.launch { runCatching { Lab.dump(applicationContext, cfg, k) }.onFailure { android.util.Log.w("Dump", "dump", it) } }
+                        return
+                    }
+                    i.getStringExtra("scan")?.let { w ->
+                        lifecycleScope.launch { Lab.scan(applicationContext, cfg, w) }
                         return
                     }
                     val site = i.getStringExtra("site") ?: return

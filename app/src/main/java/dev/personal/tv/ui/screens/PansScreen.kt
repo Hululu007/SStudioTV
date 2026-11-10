@@ -43,6 +43,7 @@ import com.google.gson.JsonObject
 import dev.personal.tv.source.PanLogin
 import dev.personal.tv.source.PluginPortal
 import dev.personal.tv.source.Sources
+import dev.personal.tv.spider.PluginSettingsActivity
 import dev.personal.tv.ui.LocalNav
 import dev.personal.tv.ui.components.Focusable
 import dev.personal.tv.ui.components.Hint
@@ -75,9 +76,14 @@ fun PansScreen() {
     var base by remember { mutableStateOf<PluginPortal.Base?>(null) }
     var err by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf(PanLogin.last) }
+    /** 插件没有 ?do=pan 接口、但有自带的设置中心站点（摸鱼儿）：网盘登录要进那里 */
+    var alt by remember { mutableStateOf<PluginPortal.Settings?>(null) }
     LaunchedEffect(Sources.url) {
-        base = null; err = null
-        PluginPortal.base(ctx).fold({ base = it }, { err = it.message ?: "插件打不开" })
+        base = null; err = null; alt = null
+        PluginPortal.base(ctx).fold({ base = it }, {
+            err = it.message ?: "插件打不开"
+            alt = withContext(Dispatchers.IO) { runCatching { PluginPortal.settings(Sources.config()) }.getOrNull() }
+        })
     }
     suspend fun refresh(b: PluginPortal.Base) {
         withContext(Dispatchers.IO) { runCatching { PluginPortal.api(b, "status") } }.getOrNull()
@@ -142,6 +148,8 @@ fun PansScreen() {
             }
         }
     }
+
+    alt?.let { SettingsEntry(it); return }
 
     // ≡ 退出登录要连按两次
     var armed by remember { mutableStateOf<String?>(null) }
@@ -271,6 +279,26 @@ fun PansScreen() {
         }
     }
     LaunchedEffect(Unit) { if (mem.lastKey == null) { delay(80); runCatching { first.requestFocus() } } }
+}
+
+/** 插件自带设置中心的入口：网盘扫码登录、账号都在里面，点进去插件自己弹二维码 */
+@Composable
+private fun SettingsEntry(st: PluginPortal.Settings) {
+    val ctx = LocalContext.current
+    val fr = remember { FocusRequester() }
+    Column(Modifier.fillMaxSize().padding(start = Dimens.SafeH, end = Dimens.SafeH, top = 36.dp, bottom = Dimens.SafeV)) {
+        T("网盘登录", 22.sp, weight = FontWeight.Bold, modifier = Modifier.padding(start = 12.dp))
+        T(
+            "当前片源的插件把网盘登录放在它自带的「${st.site.name.replace(Regex("[^\\p{L}\\p{N} ]"), "").trim()}」里：进去选对应网盘的「扫码登录」，插件会弹出二维码，用那家网盘的 App 扫。登录信息只存在这台电视的插件里。",
+            11.sp, Palette.T2, lines = 3, modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 18.dp).width(560.dp),
+        )
+        PanRow(
+            "打开插件设置中心", "夸克、UC、阿里、百度、115、天翼… 各家网盘的登录，以及播放、弹幕等插件选项",
+            Modifier.width(420.dp).focusRequester(fr),
+            onFocus = {}, onClick = { PluginSettingsActivity.open(ctx, st.jar, st.md5, st.site) }, onMenu = null,
+        ) { fg -> T("›", 16.sp, fg) }
+    }
+    LaunchedEffect(Unit) { delay(80); runCatching { fr.requestFocus() } }
 }
 
 @Composable

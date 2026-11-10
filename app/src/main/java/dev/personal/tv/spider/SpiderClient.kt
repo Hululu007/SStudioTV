@@ -38,6 +38,7 @@ object SpiderClient {
                 val why = exitReason()
                 Log.w(TAG, "spider process died: $why")
                 onDeath?.invoke(why)
+                rebind()
             }, 0)
             latch.countDown()
         }
@@ -46,6 +47,25 @@ object SpiderClient {
             host = null
             latch = CountDownLatch(1)
         }
+
+        /** 系统放弃了这个绑定（进程反复崩溃）：不会再自己连回来，要重新绑 */
+        override fun onBindingDied(name: ComponentName?) {
+            host = null
+            latch = CountDownLatch(1)
+            Thread { rebind() }.start()
+        }
+    }
+
+    /**
+     * 插件进程死了马上重新绑定。只等系统自己重启不行：短时间里崩两次（插件原生崩溃），系统会把重启推到半小时以后，
+     * 这期间所有插件调用都是「插件进程没起来」。解绑会撤掉那个排队的重启，再绑就是立刻起一个新进程。
+     */
+    @Synchronized
+    private fun rebind() {
+        if (!bound) return
+        runCatching { app.unbindService(conn) }
+        bound = false
+        bind(app)
     }
 
     /** App 启动时先拉起插件进程（本地代理也随之起来） */
@@ -59,8 +79,11 @@ object SpiderClient {
     private fun host(): ISpiderHost {
         host?.let { return it }
         if (!bound) bind(app)
-        // 插件进程刚被杀时，系统重新拉起要一两秒
-        if (!latch.await(15, TimeUnit.SECONDS)) error("插件进程没起来")
+        // 插件进程刚被杀时，系统重新拉起要一两秒；等不到就重新绑一次再等
+        if (!latch.await(10, TimeUnit.SECONDS)) {
+            rebind()
+            if (!latch.await(10, TimeUnit.SECONDS)) error("插件进程没起来")
+        }
         return host ?: error("插件进程没起来")
     }
 

@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 
 /** 源调试页的状态：放在单例里，进出播放器不丢 */
@@ -183,6 +184,73 @@ object Lab {
         probe(p)
         if (play) playRequest = "${d.name} · ${ep.name}" to p
     }
+}
+
+/**
+ * 调试用：一个配置里所有能搜的站点都搜一遍 [wd]，搜到的点开第一个、解析第一集、探测地址，每个站打一行 SCAN 日志。
+ * adb shell am broadcast -a dev.personal.tv.LAB --es cfg <地址> --es scan 繁花
+ */
+suspend fun Lab.scan(ctx: Context, cfgUrl: String, wd: String) = kotlinx.coroutines.coroutineScope {
+    val tag = "Scan"
+    val t0 = System.currentTimeMillis()
+    val c = runCatching { kotlinx.coroutines.withContext(Dispatchers.IO) { ConfigLoader.load(cfgUrl) } }.getOrElse {
+        Log.i(tag, "SCANDONE|配置加载失败 ${it.message}"); return@coroutineScope
+    }
+    Sites.clear()
+    Sources.use(cfgUrl, cfgUrl, c)
+    var deaths = 0
+    dev.personal.tv.spider.SpiderClient.onDeath = { why -> deaths++; Log.i(tag, "DEATH|$why") }
+    val kinds = c.sites.groupingBy { it.kind.label }.eachCount()
+    val sites = c.sites.filter { it.searchable }
+    Log.i(tag, "SCANCFG|${c.sites.size}|$kinds|可搜 ${sites.size}")
+    val sem = kotlinx.coroutines.sync.Semaphore(6)
+    sites.map { s ->
+        launch(Dispatchers.IO) {
+            sem.acquire()
+            try {
+                if (!s.kind.supported) { Log.i(tag, "SCAN|${s.name}|${s.kind.label}|不支持"); return@launch }
+                val t = System.currentTimeMillis()
+                fun <T> run(ms: Long, b: () -> T): T = kotlinx.coroutines.runBlocking {
+                    val j = CoroutineScope(Dispatchers.IO).async { b() }
+                    withTimeout(ms) { j.await() }
+                }
+                val r = runCatching {
+                    val api = run(20_000) { Sites.get(ctx, c, s) }
+                    val hits = run(20_000) { api.search(wd) }
+                    val v = hits.firstOrNull { it.name.contains(wd) } ?: return@runCatching "搜到 ${hits.size} 条，没有「$wd」 ${hits.take(2).joinToString { it.name + "/" + it.remarks }.take(60)}"
+                    val d = if (v.flags.isNotEmpty()) v else run(20_000) { api.detail(v.id) } ?: return@runCatching "命中，详情是空的"
+                    val f = d.flags.firstOrNull { it.episodes.isNotEmpty() } ?: return@runCatching "命中，没有播放列表"
+                    val p = run(20_000) { api.play(f.name, f.episodes.first().url) }
+                    val how = if (p.parse || p.jx) "要解析" else "直链"
+                    val pr = if (p.parse || p.jx) "" else runCatching { run(15_000) { kotlinx.coroutines.runBlocking { probe(p) } } }.getOrElse { "探测失败" }
+                    "命中 ${d.flags.size} 来源 ${f.episodes.size} 集 · ${f.name} · $how · $pr · ${p.url.take(60)}"
+                }.getOrElse { e -> "✗ " + generateSequence(e) { it.cause }.last().let { "${it.javaClass.simpleName}: ${it.message?.take(80)}" } }
+                Log.i(tag, "SCAN|${s.name}|${s.kind.label}|${s.api.take(24)}|${System.currentTimeMillis() - t}ms|$r")
+            } finally { sem.release() }
+        }
+    }.forEach { it.join() }
+    Log.i(tag, "SCANDONE|${System.currentTimeMillis() - t0}ms|插件进程死了 $deaths 次")
+}
+
+/** 调试用：把一个站点首页的每一项点开，打出来源、分集、第一集的播放结果（看配置中心这种站在干什么）。--es dump 站点key */
+suspend fun Lab.dump(ctx: Context, cfgUrl: String, key: String) = kotlinx.coroutines.withContext(Dispatchers.IO) {
+    val c = ConfigLoader.load(cfgUrl)
+    val cls = key.substringAfter('@', "")
+    val s = c.sites.first { it.key == key.substringBefore('@') || it.api == key.substringBefore('@') }
+    val api = Sites.get(ctx, c, s)
+    val home = api.home()
+    Log.i("Dump", "classes ${home.classes.joinToString { it.id + ":" + it.name }}")
+    val list = if (cls.isNotEmpty()) api.category(cls, 1).list else home.list.ifEmpty { home.classes.firstOrNull()?.let { api.category(it.id, 1).list }.orEmpty() }
+    for (v in list) {
+        Log.i("Dump", "VOD ${v.id} | ${v.name} | ${v.remarks}")
+        val d = runCatching { api.detail(v.id) }.getOrElse { Log.i("Dump", "  detail ✗ ${it.message}"); null } ?: run { Log.i("Dump", "  detail null"); null } ?: continue
+        Log.i("Dump", "  desc ${d.content.take(300)}")
+        for (f in d.flags) {
+            Log.i("Dump", "  flag ${f.name}: ${f.episodes.take(8).joinToString { it.name + "=" + it.url.take(80) }}")
+            f.episodes.firstOrNull()?.let { e -> runCatching { api.play(f.name, e.url) }.onSuccess { Log.i("Dump", "  play ${it.url.take(200)} parse=${it.parse}") }.onFailure { Log.i("Dump", "  play ✗ ${it.message?.take(200)}") } }
+        }
+    }
+    Log.i("Dump", "DUMPDONE")
 }
 
 private fun java.io.InputStream.readNBytesCompat(n: Int): ByteArray {

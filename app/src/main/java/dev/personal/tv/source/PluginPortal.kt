@@ -43,6 +43,16 @@ object PluginPortal {
         Base(local, Remote.lanIp()?.let { "http://$it:$port$path" })
     } }
 
+    /** 插件自带的「设置中心」站点（摸鱼儿的 csp_FishConfig 之类）：网盘登录在它的分类里，点了插件自己弹对话框 */
+    class Settings(val jar: String, val md5: String?, val site: SiteCfg)
+
+    fun settings(config: TvConfig): Settings? {
+        val site = config.sites.firstOrNull { it.kind == SiteKind.JAR && (it.api.endsWith("Config") || "设置" in it.name || "配置中心" in it.name) }
+            ?: return null
+        val jar = site.jar ?: config.spider ?: return null
+        return Settings(jar, if (site.jar == null) config.spiderMd5 else null, site)
+    }
+
     /** 调配置中心的接口，返回 JSON。阻塞调用 */
     fun api(b: Base, action: String, vararg q: Pair<String, String>): JsonObject {
         val u = "${b.local}&action=$action".toHttpUrl().newBuilder()
@@ -62,5 +72,5 @@ object PluginPortal {
 
     /** 播放失败的提示是不是在叫人去登录网盘 / 配置中心 */
     fun wantsLogin(msg: String?): Boolean =
-        msg != null && listOf("配置中心", "Cookie", "cookie", "登录", "扫码").any { it in msg }
+        msg != null && listOf("配置中心", "设置中心", "Cookie", "cookie", "登录", "扫码", "授权").any { it in msg }
 }
