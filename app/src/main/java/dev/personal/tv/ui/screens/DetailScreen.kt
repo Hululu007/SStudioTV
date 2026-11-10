@@ -438,7 +438,7 @@ private fun NamedEpisodeRow(
                     var m: Modifier = Modifier
                     if (ep == cur) m = m.focusRequester(curReq)
                     if (mem != null) m = m.remembered(mem, "ep:${e.name}#${occ[i]}")
-                    Focusable({ onPlay(ep, e.name) }, m, corner = 6.dp, onFocus = { focusedName = e.name.trim() }) { f ->
+                    Focusable({ onPlay(ep, e.name) }, m, corner = 6.dp, onFocus = { focusedName = Eps.fullLabel(e.name, t.name) }) { f ->
                         EpChip(
                             f, seen, isCur, false, p,
                             Modifier.height(34.dp).widthIn(min = 54.dp, max = 190.dp),

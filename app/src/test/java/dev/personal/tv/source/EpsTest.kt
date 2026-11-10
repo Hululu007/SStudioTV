@@ -133,4 +133,33 @@ class EpsTest {
         val d = eps("20230514(加更版)", "50230518", "20230518", "20230129")
         assertEquals(listOf("20230129", "20230514(加更版)", "50230518", "20230518"), Eps.ascending(d).map { it.name })
     }
+
+    @Test fun panFileNamesBecomeNumbers() {
+        // 网盘线路：文件名里的「24集全」不能当成集号，整条线路要按 1、2、3 显示
+        val line = eps("[536.8MB]01_1080P.mp4【第1季（2022）24集全】", "[542.7MB]02_1080P.mp4【第1季（2022）24集全】", "[555.9MB]03_1080P.mp4【第1季（2022）24集全】")
+        assertEquals(listOf(1, 2, 3), line.map { Eps.number(it.name, "间谍过家家 第一季") })
+        assertTrue(Eps.numeric(line, "间谍过家家 第一季"))
+        assertEquals("1", Eps.label("[536.8MB]01_1080P.mp4【第1季（2022）24集全】"))
+        assertEquals("第 2 集", Eps.text(line[1].name, 2, "间谍过家家 第一季"))
+    }
+
+    @Test fun longEpisodeNamesAreShortened() {
+        assertEquals("1 任务1 <枭>行动", Eps.label("第1话 任务1 <枭>行动"))
+        assertEquals("3 Operation Strix", Eps.label("EP03 Operation Strix 1080P"))
+        assertEquals("第3话预告", Eps.label("第3话预告"))
+        assertEquals("第3期上", Eps.label("第3期上"))
+        assertEquals("1(普通话版)", Eps.label("1(普通话版)"))
+        val long = Eps.label("第12话 阿尼亚与达米安的第一次期中考试大作战")
+        assertTrue(long, long.endsWith("…") && long.length <= 12)
+        assertEquals("12 阿尼亚与达米安的第一次期中考试大作战", Eps.fullLabel("第12话 阿尼亚与达米安的第一次期中考试大作战"))
+    }
+
+    @Test fun scrambledTitleAndQualityRemoved() {
+        // 片名拆开插符号防屏蔽，「4KHDR」「高码」是清晰度
+        val t = "小城良方"
+        assertEquals(1, Eps.number("1 4KHDR 【X - 小 - 城..良--方/ 高码】", t))
+        assertEquals(2, Eps.number("2 【X - 小 - 城..良-方】", t))
+        assertEquals("1", Eps.label("1 4KHDR 【X - 小 - 城..良--方/ 高码】", t))
+        assertEquals("# 乡音一吵吵，归途", Eps.fullLabel("# 乡音一吵吵，归途", t))
+    }
 }

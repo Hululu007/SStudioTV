@@ -32,11 +32,52 @@ data class EpId(
  */
 object Eps {
     private val QUALITY = Regex(
-        "(?<![a-z0-9])(?:\\d{3,4}[pi]|[248]k(?:\\d{2,3}(?:fps|帧)?)?|\\d{2,3}(?:fps|帧)|hdr10\\+?|hdr|dolby|uhd|fhd|hd|bd|tc|ts|web-?dl|hevc|[hx]\\.?26[45]|aac)(?![a-z])" +
-            "|杜比视界|杜比|高清|超清|标清|蓝光|原画|(?:国语|粤语|英语|普通话|原声|双语)(?:版|中字)?|中英字幕|中文字幕|中字|英字|无删减|未删减|删减版|已完结|完结|大结局|最终[集回话章]?|全集" +
+        "(?<![a-z0-9])(?:\\d{3,4}[pi]|[248]k(?:hdr)?(?:\\d{2,3}(?:fps|帧)?)?|\\d{2,3}(?:fps|帧)|hdr10\\+?|hdr|dolby|uhd|fhd|hd|bd|tc|ts|web-?dl|hevc|[hx]\\.?26[45]|aac)(?![a-z])" +
+            "|杜比视界|杜比|高清|超清|标清|蓝光|原画|高码率?|低码率?|(?:国语|粤语|英语|普通话|原声|双语)(?:版|中字)?|中英字幕|中文字幕|中字|英字|无删减|未删减|删减版|已完结|完结|大结局|最终[集回话章]?|全集" +
             "|(?<![a-z])(?:end|final)(?![a-z])",
     )
+    /**
+     * 网盘线路的分集是文件名：「[536.8MB]01_1080P.mp4【第1季（2022）24集全】」。
+     * 文件大小、扩展名、「24集全 / 全24集」这种整季的信息、括号里单独的年份，都不是这一集的名字；不去掉的话「24集」会被当成集号。
+     */
+    private val FILE_NOISE = Regex(
+        "\\d+(?:\\.\\d+)?\\s*[kmgt]i?b(?![a-z])" +
+            "|\\.(?:mp4|mkv|ts|m3u8|flv|avi|rmvb|rm|mov|wmv|webm|m4v|mpe?g|iso)(?![a-z0-9])" +
+            "|(?:全|共)\\s*\\d+\\s*[集话話期]|\\d+\\s*[集话話期]\\s*全|更新至\\s*\\d+\\s*[集话話期]?" +
+            "|[（(\\[【]\\s*(?:19|20)\\d{2}\\s*[)）\\]】]",
+        RegexOption.IGNORE_CASE,
+    )
+    /** 选集按钮上不用显示的清晰度、编码（「国语版」「普通话版」留着，同一集分版本时要靠它区分） */
+    private val LABEL_NOISE = Regex(
+        "(?<![a-z0-9])(?:\\d{3,4}[pi]|[248]k(?:hdr)?|uhd|fhd|hd|bd|web-?dl|hevc|[hx]\\.?26[45]|aac|hdr10\\+?|hdr)(?![a-z])|杜比视界|杜比|高码率?|低码率?",
+        RegexOption.IGNORE_CASE,
+    )
+    /** 括号 / 分隔符清掉内容后留下的空壳：「[]」「【 （） 】」「_ .」 */
+    private val EMPTY_BRACKETS = Regex("[\\[(（【《<「]\\s*[)）\\]】》>」]")
+    private val EDGE = " -_·•.,，。:：;；|/\\~～"
+    /** 选集按钮上最多显示的宽度（汉字算 2，字母数字算 1），超了截断加「…」，完整名字聚焦时在标题旁边显示 */
+    private const val LABEL_MAX = 20
+
+    /**
+     * 去掉名字里的片名。有的站把片名拆开插符号防屏蔽：「1 4KHDR 【X - 小 - 城..良--方/ 高码】」，
+     * 片名的字按顺序都在、中间隔着少量符号也算；在括号里的话整个括号去掉（括号里剩下的「X」「/」也是噪音）。
+     */
+    fun stripTitle(name: String, title: String): String {
+        if (title.length < 2) return name
+        var s = name.replace(title, " ", ignoreCase = true).replace(title.filterNot { it.isWhitespace() }, " ", ignoreCase = true)
+        val cjk = title.filter { it in '\u4e00'..'\u9fff' }
+        if (cjk.length < 2) return s
+        val loose = synchronized(titleRes) {
+            titleRes.getOrPut(cjk) { Regex(cjk.map { Regex.escape(it.toString()) }.joinToString("[^\\u4e00-\\u9fff\\d]{0,4}")) }
+        }
+        s = BRACKET.replace(s) { m -> if (loose.containsMatchIn(m.value)) " " else m.value }
+        return loose.replace(s, " ")
+    }
+    private val titleRes = HashMap<String, Regex>()
+    private val BRACKET = Regex("[【\\[]([^【】\\[\\]]*)[】\\]]")
+
     private val SEASON = Regex("第[零一二两三四五六七八九十\\d]+季|(?<![a-z])s(?:eason)?\\s*\\d{1,2}(?![\\d])")
+    private val SEASON_ANY = Regex(SEASON.pattern, RegexOption.IGNORE_CASE)
     private val DATE_FULL = Regex("第?(?<!\\d)(20\\d{2})(?:[-./年\\s]\\s*(\\d{1,2})\\s*[-./月]\\s*(\\d{1,2})\\s*[日号]?|(\\d{2})(\\d{2}))(?!\\d)\\s*期?")
     private val DATE_MD = Regex("(?<!\\d)(\\d{1,2})月(\\d{1,2})[日号]?\\s*期?")
     private val DATE_QI = Regex("(?<![\\d第])([01]\\d)([0-3]\\d)\\s*期")
@@ -75,10 +116,8 @@ object Eps {
 
     private fun doParse(name: String, title: String): EpId {
         var s = name.lowercase().map { if (it in '０'..'９') '0' + (it - '０') else it }.joinToString("")
-        if (title.length >= 2) {
-            val tl = title.lowercase()
-            s = s.replace(tl, " ").replace(tl.filterNot { it.isWhitespace() }, " ")
-        }
+        s = stripTitle(s, title.lowercase())
+        s = FILE_NOISE.replace(s, " ")
         s = QUALITY.replace(s, " ")
         s = SEASON.replace(s, " ")
 
@@ -295,12 +334,29 @@ object Eps {
     }
 
     /**
-     * 选集按钮上显示的字：去掉片名和清晰度这类噪音，日期缩成「11.01」。
+     * 去掉片名、文件大小、扩展名、清晰度、整季信息后的名字，不截断（聚焦时显示完整名字用）。
+     * 「[536.8MB]01_1080P.mp4【第1季（2022）24集全】」→「01」
+     */
+    fun clean(name: String, title: String = ""): String {
+        var s = name.trim()
+        s = stripTitle(s, title)
+        s = FILE_NOISE.replace(s, " ")
+        s = LABEL_NOISE.replace(s, " ")
+        s = SEASON_ANY.replace(s, " ")
+        repeat(3) { s = EMPTY_BRACKETS.replace(s, " ") }
+        s = s.replace(Regex("\\s+"), " ").trim { it in EDGE }.trim()
+        return s.ifEmpty { name.trim() }
+    }
+
+    /**
+     * 选集按钮上显示的字：去掉噪音（[clean]），日期缩成「11.01」，「第1话 任务1 <枭>行动」→「1 任务1 <枭>行动」，太长的截断。
      * 「奔跑吧 第20241101期(上)」→「11.01 上」
      */
-    fun label(name: String, title: String = ""): String {
-        var s = name.trim()
-        if (title.length >= 2) s = s.replace(title, "").trim()
+    fun label(name: String, title: String = ""): String = shorten(fullLabel(name, title))
+
+    /** [label] 不截断的版本 */
+    fun fullLabel(name: String, title: String = ""): String {
+        val s = clean(name, title)
         val id = parse(name, title)
         if (id.date != null) {
             val low = s.lowercase()
@@ -314,7 +370,26 @@ object Eps {
         }
         // 按名字显示的线路里，「第1期」「0317」原样留着；只有「01」这种纯短数字才去掉前导 0
         if (s.length < 4 && s.all { it.isDigit() }) return s.trimStart('0').ifEmpty { "0" }
-        return s.ifEmpty { name.trim() }
+        // 电视剧带副标题：「第1话 任务1」「EP01 任务1」→「1 任务1」（综艺的「第3期」不动）
+        EP_HEAD.find(s)?.let { m ->
+            val rest = s.substring(m.range.last + 1).trim { it in EDGE }.trim()
+            if (rest.isNotEmpty() && TAGS.none { it.second.containsMatchIn(rest.lowercase()) }) {
+                return normNum(m.groupValues[1].ifEmpty { m.groupValues[2] }) + " " + rest
+            }
+        }
+        return s
+    }
+
+    private val EP_HEAD = Regex("^(?:第\\s*(\\d{1,4})\\s*[集话話回]|(?:episode|ep|e)\\s*(\\d{1,4})(?!\\d))", RegexOption.IGNORE_CASE)
+
+    /** 超过 [LABEL_MAX] 宽度截断 */
+    private fun shorten(s: String): String {
+        var w = 0
+        for ((i, c) in s.withIndex()) {
+            w += if (c.code < 0x80) 1 else 2
+            if (w > LABEL_MAX) return s.substring(0, i).trimEnd() + "…"
+        }
+        return s
     }
 
     /**
