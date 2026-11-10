@@ -225,6 +225,12 @@ private fun DoubanBox(t: Title, modifier: Modifier) {
         modifier.background(Color.White.copy(alpha = 0.07f), RoundedCornerShape(10.dp)).padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        if (t.fromSource) {
+            T("片源", 11.sp, Color.White, FontWeight.Bold, Modifier.background(Palette.T3, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 1.dp))
+            T("豆瓣上没有这部", 16.sp, Palette.T2, FontWeight.Bold)
+            T(t.oneLiner, 10.sp, Palette.T3)
+            return@Row
+        }
         DoubanTag()
         val s = t.score
         if (s == null) {
@@ -514,6 +520,10 @@ private fun MiniHead(t: Title, p: Progress?, modifier: Modifier) {
 private fun WorthIt(t: Title, @Suppress("UNUSED_PARAMETER") mem: FocusMemory) {
     val h = Catalog.heat(t.id)
     SectionTitle("值不值得看", "豆瓣的人数统计，不显示任何帖子内容", 15.sp, Modifier.padding(start = Dimens.SafeH))
+    if (t.fromSource) {
+        T("这部是在片源里搜到的，豆瓣上没有，没有评分和人数。", 11.sp, Palette.T3, modifier = Modifier.padding(start = Dimens.SafeH, top = 6.dp, bottom = 24.dp))
+        return
+    }
     if (h == null) {
         T("正在从豆瓣取…", 11.sp, Palette.T3, modifier = Modifier.padding(start = Dimens.SafeH, top = 6.dp, bottom = 24.dp))
         return

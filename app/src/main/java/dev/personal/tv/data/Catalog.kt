@@ -122,6 +122,11 @@ object Catalog {
 
     fun get(id: String): Title? = titles[id]
 
+    /** 片源里搜到的（豆瓣没有）：放进片库好打开详情；同 id 已有的照样换成新的（海报、简介可能更全） */
+    fun putSource(list: List<Title>) {
+        list.forEach { titles[it.id] = it }
+    }
+
     /** 合并：列表接口的残缺数据不覆盖已经补全的详情，只更新评分和海报 */
     fun put(list: List<Title>) {
         for (t in list) {
@@ -227,6 +232,7 @@ object Catalog {
     fun heat(id: String): Heat? = heats[id]
 
     suspend fun loadHeat(t: Title) {
+        if (t.fromSource) return
         if (heats.containsKey(t.id) || !inflight.add("heat:${t.id}")) return
         try {
             runCatching { withContext(Dispatchers.IO) { Douban.rating(t) } }.getOrNull()?.let { heats[t.id] = it }
@@ -236,6 +242,7 @@ object Catalog {
     // ---------------------------------------------------------------- 找类似
 
     suspend fun loadSimilar(t: Title) {
+        if (t.fromSource) return
         if (recs.containsKey(t.id) || !inflight.add("rec:${t.id}")) return
         try {
             val list = runCatching { withContext(Dispatchers.IO) { Douban.recommendations(t) } }.getOrNull() ?: return

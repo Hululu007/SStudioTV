@@ -61,6 +61,10 @@ import dev.personal.tv.data.Prefs
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import dev.personal.tv.data.SearchIndex
+import dev.personal.tv.source.SourceSearch
+import dev.personal.tv.source.Sources
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.ui.platform.LocalContext
 import dev.personal.tv.ui.LocalNav
 import dev.personal.tv.ui.Route
 import dev.personal.tv.ui.components.Focusable
@@ -88,13 +92,27 @@ fun SearchScreen() {
     var found by remember { mutableStateOf<List<dev.personal.tv.data.Title>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
     val remote = ime || q.any { it.code > 0x7F }
+    // 片源里搜（豆瓣上没有的）：srcQ 不为空就开始搜；豆瓣一部都没搜到时自动搜，有结果时在最后放按钮
+    var srcQ by remember { mutableStateOf<String?>(null) }
+    var src by remember { mutableStateOf<List<dev.personal.tv.data.Title>>(emptyList()) }
+    var srcProgress by remember { mutableStateOf(0 to 0) }
+    var srcDone by remember { mutableStateOf(false) }
     // 索引边建边搜：每多两千部重新搜一次
     LaunchedEffect(q, remote, SearchIndex.size / 2000) {
+        if (srcQ != q.trim()) { srcQ = null; src = emptyList() }
         if (q.isBlank()) { found = emptyList(); return@LaunchedEffect }
         searching = true
         delay(if (remote) 350 else 120)
         found = Catalog.search(q.trim(), remote)
         searching = false
+        if (remote && found.isEmpty() && !Sources.empty && srcQ == null) srcQ = q.trim()
+    }
+    val ctx = LocalContext.current
+    LaunchedEffect(srcQ) {
+        val sq = srcQ ?: return@LaunchedEffect
+        srcDone = false; src = emptyList(); srcProgress = 0 to 0
+        SourceSearch.search(ctx, sq, found.filter { !it.fromSource }) { list, n, total -> src = list; srcProgress = n to total }
+        srcDone = true
     }
     val results = if (q.isEmpty()) Catalog.hot().take(10) else found
     val field = remember { FocusRequester() }
@@ -172,6 +190,7 @@ fun SearchScreen() {
                 when {
                     q.isEmpty() -> T("豆瓣最近热门 · 片库 ${SearchIndex.size} 部$building", 10.5.sp, Palette.T3)
                     searching && results.isEmpty() -> T("搜索中…", 10.5.sp, Palette.T3)
+                    results.isEmpty() && remote && srcQ != null -> T("豆瓣上没找到" + if (srcDone) "" else "，正在片源里搜…", 10.5.sp, Palette.T3)
                     results.isEmpty() && remote -> T("豆瓣上也没找到，换个说法试试", 10.5.sp, Palette.T3)
                     results.isEmpty() -> T("片库 ${SearchIndex.size} 部里没找到$building。试试「用输入法打字」", 10.5.sp, Palette.T3)
                     else -> T("${results.size} 部" + if (remote) " · 含豆瓣联想" else " · 在 ${SearchIndex.size} 部片库里找$building", 10.5.sp, Palette.T3)
@@ -195,6 +214,37 @@ fun SearchScreen() {
                         )
                     }
                     if (searching && results.size < 5) items(3) { GhostCell() }
+                    // ---- 片源里的（豆瓣上没有的）----
+                    if (remote && q.isNotBlank() && !searching && !Sources.empty) {
+                        val started = srcQ != null
+                        val ids = results.map { it.id }.toSet()
+                        val more = src.filter { it.id !in ids }
+                        // 按钮和搜的进度是同一行：按下去以后焦点还在这一行上，不会掉回输入框
+                        item(key = "src:go", span = { GridItemSpan(maxLineSpan) }) {
+                            val (n, total) = srcProgress
+                            SrcButton(
+                                if (!started) "在片源里搜「${q.trim()}」" else "片源里的「${q.trim()}」",
+                                when {
+                                    !started -> "找豆瓣上没有、站点里有的片子（短剧、冷门的），要等十几秒"
+                                    !srcDone -> "豆瓣上没有、站点里有的 · 搜了 $n / $total 个站点…"
+                                    more.isEmpty() -> if (results.isEmpty()) "搜了 $n 个站点，片源里也没有" else "搜了 $n 个站点，没有豆瓣以外的"
+                                    else -> "豆瓣上没有、站点里有的 ${more.size} 部 · 没有豆瓣评分"
+                                },
+                                Modifier.remembered(mem, "src:go"),
+                            ) { if (!started) srcQ = q.trim() }
+                        }
+                        if (started) {
+                            items(more, key = { it.id }) { t ->
+                                PosterCell(
+                                    t, focusModifier = Modifier.remembered(mem, "r:${t.id}"),
+                                    onClick = { Catalog.putSource(listOf(t)); Prefs.addSearched(t.id, t.name); nav.openDetail(t.id) },
+                                    sub = listOf(if (t.year > 0) "${t.year}" else "", t.genres.firstOrNull() ?: t.kind.label).filter { it.isNotEmpty() }.joinToString(" · "),
+                                    badge = "片源",
+                                )
+                            }
+                            if (!srcDone && more.size < 5) items(3) { GhostCell() }
+                        }
+                    }
                 }
             }
         }
@@ -238,6 +288,20 @@ private fun History(mem: dev.personal.tv.ui.components.FocusMemory) {
                     Modifier.background(if (f) Color.White else Color.Transparent, RoundedCornerShape(18.dp)).padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
+        }
+    }
+}
+
+/** 「在片源里搜」：豆瓣有结果时放在最后，按了才搜（几十个站点一起搜要十几秒） */
+@Composable
+private fun SrcButton(title: String, sub: String, modifier: Modifier, onClick: () -> Unit) {
+    Focusable(onClick, modifier.padding(top = 6.dp).fillMaxWidth(), corner = 9.dp, scale = 1.02f, ring = false) { f ->
+        Column(
+            Modifier.fillMaxWidth().background(if (f) Color.White else Color.White.copy(alpha = 0.05f)).padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            T(title, 12.5.sp, if (f) Palette.Bg else Palette.T1, FontWeight.SemiBold)
+            T(sub, 9.sp, if (f) Palette.Bg.copy(alpha = 0.6f) else Palette.T3)
         }
     }
 }

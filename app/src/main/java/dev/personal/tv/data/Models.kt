@@ -38,6 +38,8 @@ data class Title(
 ) {
     val isEpisodic get() = dtype == "tv"
     val isVariety get() = kind == Kind.VARIETY
+    /** 豆瓣上没有、只在片源里搜到的（见 [dev.personal.tv.source.SourceSearch]）：没有评分、人数、剧照 */
+    val fromSource get() = id.startsWith(dev.personal.tv.source.SourceSearch.PREFIX)
     val scoreText get() = score?.let { "%.1f".format(it) }
     /** 没海报时用的渐变，按 id 固定，同一部片每次一样 */
     val art: ArtStyle get() = ArtStyle.entries[(id.hashCode() and 0x7fffffff) % ArtStyle.entries.size]

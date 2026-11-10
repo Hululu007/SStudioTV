@@ -38,6 +38,7 @@ object Stills {
 
     /** 剧照地址；没有横图或者还在查返回 null */
     fun get(t: Title): String? {
+        if (t.fromSource) return null
         val v = map[t.id]
         if (v == null) request(t)
         return v?.ifEmpty { null }
