@@ -61,6 +61,21 @@ data class Title(
             }
         }
 
+    /** 还在连载（豆瓣写着更新中，或已出的集数没到总集数） */
+    val airing: Boolean get() = isEpisodic && (schedule != null || airedEps < totalEps)
+
+    /**
+     * 把另一份数据（列表接口、刚拉的详情）里的集数进度并进来：已出集数只往前走；
+     * 对方写着「N 集全」就按完结算，去掉「更新中」。对方没带集数信息时原样返回。
+     */
+    fun withEpsFrom(n: Title): Title {
+        if (!isEpisodic || n.totalEps <= 1 && n.airedEps <= 1) return this
+        val aired = maxOf(airedEps, n.airedEps)
+        val ended = n.schedule == null && n.airedEps >= n.totalEps
+        val total = if (ended) maxOf(n.totalEps, aired) else maxOf(totalEps, n.totalEps, aired)
+        return copy(airedEps = aired, totalEps = total, schedule = if (aired < total) schedule ?: n.schedule ?: "更新中" else null)
+    }
+
     /** 「更新至 12 集 / 共 24 集」「全 16 集」「118 分钟」，没数据时为空 */
     val epsText: String
         get() = when {

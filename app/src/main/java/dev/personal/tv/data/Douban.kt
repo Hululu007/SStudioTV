@@ -174,8 +174,9 @@ object Douban {
         }
 
     /** 详情。/movie/{id} 对剧集会 302 到 /tv/{id}，所以类型猜错也没关系 */
-    fun detail(id: String, dtype: String): Title {
-        val o = get("$API/$dtype/$id", ttl = 3 * DAY, stale = true).asJsonObject
+    /** [maxAge]：缓存最多用多久。连载中的剧传短的，过期就当场重拉（拉不到还用旧的） */
+    fun detail(id: String, dtype: String, maxAge: Long = 3 * DAY): Title {
+        val o = get("$API/$dtype/$id", ttl = maxAge, stale = maxAge >= DAY).asJsonObject
         val type = o.str("type") ?: dtype
         val genres = o.arr("genres").mapNotNull { it.s() }
         val rating = o.obj("rating")

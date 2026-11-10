@@ -85,6 +85,7 @@ object Catalog {
         }
         appScope.launch {
             if (System.currentTimeMillis() - hotAt > 3600_000 || hotTv.isEmpty()) refreshHot()
+            refreshAllAiring()
             prefetch()
         }
     }
@@ -128,6 +129,7 @@ object Catalog {
             titles[t.id] = when {
                 old == null -> t
                 old.full && !t.full -> old.copy(score = t.score ?: old.score, ratingCount = maxOf(t.ratingCount, old.ratingCount), poster = old.poster ?: t.poster)
+                    .withEpsFrom(t)
                 else -> t.copy(poster = t.poster ?: old.poster)
             }
         }
@@ -137,7 +139,7 @@ object Catalog {
     fun bumpAired(id: String, eps: Int) {
         val t = titles[id] ?: return
         if (!t.isEpisodic || eps <= t.airedEps) return
-        titles[id] = t.copy(airedEps = eps, totalEps = maxOf(t.totalEps, eps))
+        titles[id] = t.copy(airedEps = eps, totalEps = maxOf(t.totalEps, eps), schedule = t.schedule.takeIf { eps < t.totalEps })
     }
 
     // ---------------------------------------------------------------- 最近热门
@@ -177,9 +179,9 @@ object Catalog {
 
     private val detailLock = Mutex()
 
-    /** 补全详情（导演、简介、集数），已补全的直接返回 */
+    /** 补全详情（导演、简介、集数），已补全的直接返回；连载中的顺手在后台重拉一次集数 */
     suspend fun ensureFull(id: String): Title? {
-        titles[id]?.takeIf { it.full }?.let { return it }
+        titles[id]?.takeIf { it.full }?.let { if (it.airing) appScope.launch { refreshAiring(id) }; return it }
         val t = titles[id] ?: return null
         return detailLock.withLock {
             titles[id]?.takeIf { it.full }?.let { return@withLock it }
@@ -191,6 +193,35 @@ object Catalog {
                     merged
                 } ?: t
         }
+    }
+
+    /** 本次启动已经重拉过集数的，不重复拉 */
+    private val airingChecked = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * 连载中的剧重拉详情看出到第几集、完结没有。补全过的条目存在 catalog.json 里不会再拉，
+     * 不重拉的话完结了首页还一直写「更新中」。详情缓存 6 小时内直接用。
+     */
+    private suspend fun refreshAiring(id: String) {
+        val old = titles[id]?.takeIf { it.full && it.airing } ?: return
+        if (!airingChecked.add(id)) return
+        val d = runCatching { withContext(Dispatchers.IO) { Douban.detail(id, old.dtype, maxAge = 6 * 3600_000L) } }
+            .onFailure { Log.w(TAG, "airing $id", it); airingChecked.remove(id) }
+            .getOrNull() ?: return
+        withContext(Dispatchers.Main) {
+            val cur = titles[id] ?: old
+            titles[id] = d.copy(poster = d.poster ?: cur.poster).withEpsFrom(cur)
+        }
+    }
+
+    /** 启动时把在看的、想看的、首页热门里还在连载的都重拉一遍集数 */
+    private suspend fun refreshAllAiring() {
+        val ids = (Store.progress.keys + Store.wish + hotTv).distinct().filter { titles[it]?.airing == true }
+        val sem = Semaphore(3)
+        coroutineScope { ids.forEach { id -> launch { sem.withPermit { refreshAiring(id) } } } }
+        Log.i(TAG, "airing refreshed ${ids.size}")
+        // 只改了集数，条目数没变，存盘的监听不会触发，这里自己存
+        if (ids.isNotEmpty()) save()
     }
 
     fun heat(id: String): Heat? = heats[id]
