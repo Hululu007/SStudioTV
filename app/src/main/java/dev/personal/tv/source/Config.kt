@@ -62,7 +62,7 @@ data class SiteCfg(
             Triple("体育", listOf("体育", "球赛"), listOf("Sport")),
             Triple("课程", listOf("课堂", "教育", "教学", "学习"), emptyList()),
             Triple("网盘搜索", listOf("盘搜", "网盘搜", "云盘搜"), listOf("So")),
-            Triple("工具", listOf("配置", "推送", "我的网盘", "本地"), listOf("Push", "PanConfig", "MyPan", "Config", "Local")),
+            Triple("工具", listOf("配置", "设置", "推送", "我的网盘", "本地"), listOf("Push", "PanConfig", "FishConfig", "MyPan", "Config", "Local")),
         )
     }
 }

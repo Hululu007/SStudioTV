@@ -91,6 +91,10 @@ fun SettingsScreen() {
             Row("夜间音量", "压缩响度差：爆炸声不炸，对白不小", Modifier.remembered(mem, "night"), onClick = { AudioFx.night = !AudioFx.night }) { fg ->
                 Toggle(AudioFx.night, onLight = fg == Palette.Bg)
             }
+            Section("显示")
+            Row("海报大小 · ${Prefs.posterLabel}", "首页、找片、搜索、站点、想看的海报都跟着变", Modifier.remembered(mem, "poster"), onClick = { Prefs.posterSize = (Prefs.posterSize + 1) % 3 }) { fg ->
+                T(listOf("小", "中", "大").joinToString("  ") { if (it == Prefs.posterLabel) "●$it" else it }, 11.sp, fg)
+            }
             Section("片库")
             Row(
                 "搜索索引 · ${SearchIndex.size} 部",

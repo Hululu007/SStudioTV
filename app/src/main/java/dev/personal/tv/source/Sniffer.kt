@@ -74,6 +74,13 @@ object Sniffer {
                     mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 }
                 w.webViewClient = object : WebViewClient() {
+                    /** 当前页面地址。shouldInterceptRequest 在后台线程，不能调 view.url（WebView 只能在主线程用，调了整个 App 崩） */
+                    @Volatile var page = pageUrl
+
+                    override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                        if (url != null) page = url
+                    }
+
                     override fun shouldInterceptRequest(view: WebView, req: WebResourceRequest): WebResourceResponse? {
                         val url = req.url.toString()
                         val host = req.url.host.orEmpty()
@@ -84,7 +91,7 @@ object Sniffer {
                             val h = LinkedHashMap<String, String>()
                             req.requestHeaders.forEach { (k, v) -> if (!k.equals("Range", true)) h[k] = v }
                             if (h.keys.none { it.equals("User-Agent", true) }) h["User-Agent"] = ua
-                            if (h.keys.none { it.equals("Referer", true) }) h["Referer"] = view.url ?: pageUrl
+                            if (h.keys.none { it.equals("Referer", true) }) h["Referer"] = page
                             CookieManager.getInstance().getCookie(url)?.let { h["Cookie"] = it }
                             Log.i(TAG, "hit $url  ←  $pageUrl")
                             finish(PlayInfo(url, h, parse = false, jx = false))

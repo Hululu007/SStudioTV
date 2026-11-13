@@ -89,6 +89,8 @@ fun HomeScreen(mem: FocusMemory) {
     val nav = LocalNav.current
     val cw = Store.continueWatching()
     val hot = Catalog.hot().filter { it.id !in Store.progress }.take(14)
+    /** 热门海报宽度，跟设置里的「海报大小」 */
+    val hotW = listOf(64.dp, 75.dp, 90.dp)[dev.personal.tv.data.Prefs.posterSize]
 
     var focusedId by rememberSaveable { mutableStateOf<String?>(null) }
     val focused = (focusedId ?: cw.firstOrNull()?.first?.id ?: hot.firstOrNull()?.id)?.let { Catalog.get(it) }
@@ -179,7 +181,7 @@ fun HomeScreen(mem: FocusMemory) {
                             items(hot, key = { it.id }) { t ->
                                 PosterCard(
                                     t, if (t.name.length > 4) 9.sp else 10.sp, 6.dp,
-                                    Modifier.size(75.dp, 112.5.dp).remembered(mem, "hot:${t.id}", isDefault = cw.isEmpty() && t == hot.first()),
+                                    Modifier.size(hotW, hotW * 1.5f).remembered(mem, "hot:${t.id}", isDefault = cw.isEmpty() && t == hot.first()),
                                     onClick = { nav.openDetail(t.id) },
                                     onMenu = { nav.posterMenu(t) },
                                     onFocus = { focusedId = t.id },
@@ -188,7 +190,7 @@ fun HomeScreen(mem: FocusMemory) {
                             item(key = "more") {
                                 Focusable(
                                     onClick = { nav.selectTab(Tab.FIND, focusContent = true) },
-                                    modifier = Modifier.size(150.dp, 112.5.dp).remembered(mem, "more"),
+                                    modifier = Modifier.size(150.dp, hotW * 1.5f).remembered(mem, "more"),
                                     corner = 6.dp,
                                 ) { f ->
                                     Column(
@@ -246,11 +248,16 @@ private fun HeroInfo(t: Title, p: Progress?, hotRank: Int) {
         }
         DisplayTitle(t.name, 52.sp, Modifier.padding(top = 8.dp, bottom = 10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            DoubanTag()
-            if (t.score != null) {
-                T(t.scoreText!!, 15.sp, Palette.Star, FontWeight.Bold, Modifier.padding(start = 7.dp, end = 5.dp))
-                Stars(t.score, 10.sp)
-            } else T("暂无评分", 11.sp, Palette.T3, modifier = Modifier.padding(start = 7.dp))
+            if (t.fromSource) {
+                // 片源里来的（站点浏览、片源搜索），没有豆瓣评分
+                T("片源", 10.sp, Color.White, FontWeight.Bold, Modifier.background(Palette.T3, RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 1.dp))
+            } else {
+                DoubanTag()
+                if (t.score != null) {
+                    T(t.scoreText!!, 15.sp, Palette.Star, FontWeight.Bold, Modifier.padding(start = 7.dp, end = 5.dp))
+                    Stars(t.score, 10.sp)
+                } else T("暂无评分", 11.sp, Palette.T3, modifier = Modifier.padding(start = 7.dp))
+            }
             if (t.year > 0) { Dot(); T("${t.year}", 12.sp, Palette.T2) }
             if (t.genres.isNotEmpty()) { Dot(); T(t.genres.take(2).joinToString(" / "), 12.sp, Palette.T2) }
             if (t.epsText.isNotEmpty()) { Dot(); T(t.epsText, 12.sp, Palette.T2) }

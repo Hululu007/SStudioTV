@@ -151,7 +151,8 @@ fun Stars(score: Float, size: TextUnit) {
 @Composable
 fun Score(t: Title, size: TextUnit, star: Boolean = false) {
     val s = t.scoreText
-    if (s == null) T("暂无评分", size * 0.85f, Palette.T3)
+    // 片源里来的没有豆瓣评分，不写「暂无评分」占地方
+    if (s == null) { if (!t.fromSource) T("暂无评分", size * 0.85f, Palette.T3) }
     else T(if (star) "★ $s" else s, size, Palette.Star, FontWeight.Bold)
 }
 

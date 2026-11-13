@@ -198,7 +198,7 @@ fun SearchScreen() {
             }
             TopAlignScroll(8.dp) {
                 LazyVerticalGrid(
-                    GridCells.Fixed(5),
+                    GridCells.Fixed(Prefs.cols(5)),
                     Modifier.padding(top = 3.dp).fillMaxHeight(),
                     contentPadding = PaddingValues(top = 8.dp, bottom = Dimens.SafeV, start = 4.dp, end = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),

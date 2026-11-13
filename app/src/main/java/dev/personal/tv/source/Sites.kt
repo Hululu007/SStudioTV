@@ -24,7 +24,12 @@ class CmsSite(private val cfg: SiteCfg) : SiteApi {
         return Net.get(b.build().toString(), cfg.header, cfg.timeout.toLong().coerceIn(5, 30))
     }
 
-    override fun home() = VodJson.page(call("ac" to "list"))
+    /** 分类从 ac=list 拿；它的列表没有海报，列表改用 ac=detail 第一页（最近更新的） */
+    override fun home(): VodPage {
+        val p = VodJson.page(call("ac" to "list"))
+        val list = runCatching { VodJson.page(call("ac" to "detail", "pg" to "1")).list }.getOrDefault(emptyList())
+        return VodPage(p.classes, list.ifEmpty { p.list })
+    }
     override fun category(tid: String, page: Int) = VodJson.page(call("ac" to "detail", "t" to tid, "pg" to "$page"))
     override fun search(wd: String) = VodJson.page(call("ac" to "detail", "wd" to wd)).list
     override fun detail(id: String) = VodJson.page(call("ac" to "detail", "ids" to id)).list.firstOrNull()
@@ -49,7 +54,11 @@ class CmsXmlSite(private val cfg: SiteCfg) : SiteApi {
         return parse(Net.get(b.build().toString(), cfg.header, cfg.timeout.toLong().coerceIn(5, 30)))
     }
 
-    override fun home() = call("ac" to "list")
+    override fun home(): VodPage {
+        val p = call("ac" to "list")
+        val list = runCatching { call("ac" to "videolist", "pg" to "1").list }.getOrDefault(emptyList())
+        return VodPage(p.classes, list.ifEmpty { p.list })
+    }
     override fun category(tid: String, page: Int) = call("ac" to "videolist", "t" to tid, "pg" to "$page")
     override fun search(wd: String) = call("ac" to "videolist", "wd" to wd).list
     override fun detail(id: String) = call("ac" to "videolist", "ids" to id).list.firstOrNull()
@@ -125,7 +134,13 @@ class JarSite(private val jar: String, private val md5: String?, private val cfg
     /** 只加载 jar、初始化插件（插件的配置中心、本地代理要先有它） */
     fun wake() { call("isVideo", "") }
 
-    override fun home() = VodJson.page(call("home"))
+    /** 首页：分类在 homeContent，推荐列表大多在 homeVideoContent（影视仓两个都调），homeContent 没带列表就再要一次 */
+    override fun home(): VodPage {
+        val p = VodJson.page(call("home"))
+        if (p.list.isNotEmpty()) return p
+        val more = runCatching { VodJson.page(call("homeVideo")).list }.getOrDefault(emptyList())
+        return if (more.isEmpty()) p else VodPage(p.classes, more)
+    }
     override fun category(tid: String, page: Int) = VodJson.page(call("category", tid, "$page"))
     override fun search(wd: String): List<Vod> {
         // 有的插件（摸鱼儿）刚加载时异步做宿主验证，验证完之前每个站点只回一条「宿主验证未就绪，请稍候」：等一下再搜

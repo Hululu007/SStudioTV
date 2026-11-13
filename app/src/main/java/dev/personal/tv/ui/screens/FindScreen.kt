@@ -308,7 +308,7 @@ private fun PosterGridWithInfo(titles: List<Title>, mem: FocusMemory, grid: Lazy
         } else {
             TopAlignScroll(8.dp) {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(6),
+                    columns = GridCells.Fixed(dev.personal.tv.data.Prefs.cols(6)),
                     state = grid,
                     modifier = Modifier.padding(start = Dimens.SafeH - 8.dp).width(640.dp).fillMaxHeight(),
                     contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 8.dp, bottom = Dimens.SafeV),

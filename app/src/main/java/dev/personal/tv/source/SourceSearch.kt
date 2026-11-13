@@ -24,6 +24,7 @@ object SourceSearch {
     const val PREFIX = "src:"
     /** 最多列这么多部（按几个站点有排序，太散的零星结果不列） */
     private const val MAX = 60
+    private val PIC_HEADERS = Regex("@(Referer|User-Agent|Cookie|Headers|Origin)=.*$", RegexOption.IGNORE_CASE)
 
     /**
      * 搜。每搜完一个站点回调一次 [onUpdate]（结果、已搜站数、总站数），在调用方的线程上。
@@ -96,6 +97,48 @@ object SourceSearch {
             toTitle("$PREFIX$key", v, y, hits.map { it.first.key }.distinct().size)
         }
 
+    // ------------------------------------------------------------ 站点浏览
+
+    /** 浏览站点时点开的片：id = src:@站点key@片子id。线路直接用这个站点给的分集（见 [Lines]），不按片名去配 */
+    data class Origin(val siteKey: String, val vodId: String)
+
+    fun origin(id: String): Origin? {
+        if (!id.startsWith("$PREFIX@")) return null
+        val rest = id.substring(PREFIX.length + 1)
+        val i = rest.indexOf('@')
+        return if (i <= 0 || i == rest.lastIndex) null else Origin(rest.substring(0, i), rest.substring(i + 1))
+    }
+
+    /** 站点名去掉表情和分隔符：「🌶️┆骚火┆影视」→「骚火 影视」 */
+    fun siteLabel(name: String) = name.replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim().ifEmpty { name }
+
+    /** 站点列表里的一条做成条目 */
+    fun siteTitle(s: SiteCfg, v: Vod): Title =
+        toTitle("$PREFIX@${s.key}@${v.id}", v, year(v), 1).copy(
+            oneLiner = "来自「${siteLabel(s.name)}」" + (v.remarks.trim().takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""),
+        )
+
+    /**
+     * 拿到站点详情后补全条目：简介、海报、主演；分集多于 1 集的按剧集算（站点列表里常常看不出是电影还是剧），
+     * 不然线路和选集都按电影处理，只剩一集。
+     */
+    fun enrich(t: Title, v: Vod): Title {
+        val d = toTitle(t.id, v, year(v).takeIf { it > 0 } ?: t.year, 1)
+        val eps = v.flags.maxOfOrNull { it.episodes.size } ?: 0
+        val kind = when {
+            eps > 1 && t.kind == Kind.MOVIE -> if (d.kind != Kind.MOVIE) d.kind else Kind.SERIES
+            eps == 1 && t.kind == Kind.SERIES && d.kind == Kind.MOVIE -> Kind.MOVIE
+            else -> t.kind
+        }
+        return t.copy(
+            name = t.name.ifBlank { d.name }, year = if (t.year > 0) t.year else d.year,
+            region = t.region.ifBlank { d.region }, kind = kind, dtype = if (eps > 1) "tv" else if (kind == Kind.MOVIE) "movie" else t.dtype,
+            genres = t.genres.ifEmpty { d.genres }, poster = t.poster ?: d.poster,
+            desc = d.desc.ifBlank { t.desc }, director = d.director.ifBlank { t.director }, cast = d.cast.ifEmpty { t.cast },
+            totalEps = if (eps > 1) eps else t.totalEps, airedEps = if (eps > 1) eps else t.airedEps,
+        )
+    }
+
     private fun toTitle(id: String, v: Vod, year: Int, sites: Int): Title {
         val kind = kindOf(v)
         val desc = v.content.replace(Regex("<[^>]+>"), "").replace(Regex("&nbsp;?"), " ").replace(Regex("\\s+"), " ").trim()
@@ -106,7 +149,8 @@ object SourceSearch {
             genres = listOfNotNull(v.typeName.trim().takeIf { it.isNotEmpty() }),
             score = null,
             oneLiner = "片源里有 · $sites 个站点" + (v.remarks.trim().takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""),
-            poster = v.pic.trim().takeIf { it.startsWith("http") },
+            // 影视仓的约定：「地址@Referer=…@User-Agent=…」，后面是取图要带的请求头；豆瓣图的 Referer 由图片加载器统一加
+            poster = v.pic.trim().replace(PIC_HEADERS, "").takeIf { it.startsWith("http") },
             desc = desc,
             director = v.director.split(Regex("[,，/]")).map { it.trim() }.filter { it.isNotEmpty() }.take(2).joinToString(" / "),
             cast = v.actor.split(Regex("[,，/]")).map { it.trim() }.filter { it.isNotEmpty() }.take(4),

@@ -43,6 +43,8 @@ class MainActivity : ComponentActivity() {
                         }
                         return
                     }
+                    // --es use 片源名：切换当前片源
+                    i.getStringExtra("use")?.let { n -> dev.personal.tv.source.Sources.list.firstOrNull { it.name.contains(n) || it.url.contains(n) }?.let { dev.personal.tv.source.Sources.select(it) }; android.util.Log.i("Lab", "use ${dev.personal.tv.source.Sources.name}"); return }
                     // --es go pans：直接打开网盘登录页
                     if (i.getStringExtra("go") == "pans") { dev.personal.tv.ui.Navigator.current?.openPans(); return }
                     val cfg = i.getStringExtra("cfg") ?: dev.personal.tv.source.Sources.url ?: return

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
@@ -19,6 +20,15 @@ object Prefs {
     var autoLine: Boolean
         get() = _autoLine
         set(v) { _autoLine = v; sp?.edit()?.putBoolean("autoLine", v)?.apply() }
+
+    private var _posterSize by mutableIntStateOf(1)
+    /** 海报大小：0 小、1 中、2 大。网格少一列 / 多一列，首页热门的海报跟着变 */
+    var posterSize: Int
+        get() = _posterSize
+        set(v) { _posterSize = v.coerceIn(0, 2); sp?.edit()?.putInt("posterSize", _posterSize)?.apply() }
+    val posterLabel get() = listOf("小", "中", "大")[posterSize]
+    /** 网格列数：中 = [base]，小多一列，大少一列 */
+    fun cols(base: Int) = base + 1 - posterSize
 
     /** 优先的站点，越靠前越优先 */
     val preferred = mutableStateListOf<String>()
@@ -50,6 +60,7 @@ object Prefs {
         val p = ctx.getSharedPreferences("prefs", Context.MODE_PRIVATE)
         sp = p
         _autoLine = p.getBoolean("autoLine", true)
+        _posterSize = p.getInt("posterSize", 1).coerceIn(0, 2)
         preferred.addAll(p.getString("preferred", "").orEmpty().split('\n').filter { it.isNotEmpty() })
         blocked.addAll(p.getString("blocked", "").orEmpty().split('\n').filter { it.isNotEmpty() })
         searched.addAll(p.getString("searched", "").orEmpty().split('\n').mapNotNull { l ->

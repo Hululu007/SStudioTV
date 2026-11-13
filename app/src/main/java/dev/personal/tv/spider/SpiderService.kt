@@ -31,6 +31,7 @@ class SpiderService : Service() {
                 val sp = JarLoader.spider(applicationContext, jar, md5?.ifBlank { null }, key, api, ext)
                 val r = when (method) {
                     "home" -> sp.homeContent(true)
+                    "homeVideo" -> sp.homeVideoContent()
                     "category" -> sp.categoryContent(a[0], a[1], true, HashMap())
                     "search" -> sp.searchContent(a[0], false)
                     "detail" -> sp.detailContent(listOf(a[0]))
@@ -39,9 +40,13 @@ class SpiderService : Service() {
                     "manual" -> sp.manualVideoCheck().toString()
                     "isVideo" -> sp.isVideoFormat(a[0]).toString()
                     else -> error("未知方法 $method")
-                }.orEmpty()
+                }.orEmpty().let {
+                    // 插件给的「proxy://do=bili&…」是本地代理的简写（影视仓的约定），换成真的地址，不然播放器不认
+                    if (method == "play" && "proxy://" in it) it.replace("proxy://", "http://127.0.0.1:${SpiderApi.port}/proxy?") else it
+                }
                 // 解析结果的格式各家不一样，出问题时要看原文
                 if (method == "play") Log.i(TAG, "play $api → ${r.take(800)}")
+                if (method == "detail") Log.d(TAG, "detail $api → ${r.take(1500)}")
                 if (r.length > BIG) {
                     val f = File(cacheDir, "spider-out").apply { mkdirs() }.let { File(it, "${System.nanoTime()}.json") }
                     f.writeText(r)
