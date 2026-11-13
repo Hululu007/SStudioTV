@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
                     i.getStringExtra("use")?.let { n -> dev.personal.tv.source.Sources.list.firstOrNull { it.name.contains(n) || it.url.contains(n) }?.let { dev.personal.tv.source.Sources.select(it) }; android.util.Log.i("Lab", "use ${dev.personal.tv.source.Sources.name}"); return }
                     // --es go pans：直接打开网盘登录页
                     if (i.getStringExtra("go") == "pans") { dev.personal.tv.ui.Navigator.current?.openPans(); return }
+                    if (i.getStringExtra("go") == "downloads") { dev.personal.tv.ui.Navigator.current?.openDownloads(); return }
                     val cfg = i.getStringExtra("cfg") ?: dev.personal.tv.source.Sources.url ?: return
                     i.getStringExtra("purl")?.let { u ->
                         lifecycleScope.launch { Lab.parseTest(applicationContext, cfg, i.getStringExtra("flag") ?: "qq", u, i.getBooleanExtra("play", false)) }

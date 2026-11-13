@@ -25,6 +25,8 @@ class App : Application(), ImageLoaderFactory {
         // 片库和本地记录只在主进程用，插件进程不加载
         if (proc == packageName) {
             dev.personal.tv.data.Prefs.init(this)
+            dev.personal.tv.media.MediaCache.init(this)
+            dev.personal.tv.media.Downloads.init(this)
             dev.personal.tv.source.LanToken.get(this) // 插件进程启动前先生成好
             Douban.init(this)
             dev.personal.tv.data.Stills.init(this)

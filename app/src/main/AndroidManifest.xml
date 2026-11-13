@@ -5,6 +5,10 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 手机离线下载：后台下载服务和通知栏进度 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name="dev.personal.tv.App"
@@ -30,8 +34,17 @@
             android:name="dev.personal.tv.spider.PluginSettingsActivity"
             android:exported="false"
             android:process=":spider"
-            android:screenOrientation="landscape"
             android:configChanges="keyboard|keyboardHidden|navigation|screenSize|smallestScreenSize|screenLayout|orientation|uiMode|density|fontScale|locale|layoutDirection" />
+        <!-- 离线下载：退到后台也接着下 -->
+        <service
+            android:name="dev.personal.tv.media.DlService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync">
+            <intent-filter>
+                <action android:name="androidx.media3.exoplayer.downloadService.action.RESTART" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
         <!-- 第三方插件跑在单独的进程里：崩溃、卡死、自杀都不带走界面 -->
         <service
             android:name="dev.personal.tv.spider.SpiderService"

@@ -70,6 +70,7 @@ sealed class Route(val key: String) {
     data object Settings : Route("settings")
     data object Sources : Route("sources")
     data object Pans : Route("pans")
+    data object Downloads : Route("downloads")
     class LivePlay(val group: Int, val channel: Int, n: Int) : Route("liveplay:$n")
     class LabPlay(val title: String, val url: String, val headers: Map<String, String>, val parse: Boolean, val format: String?, n: Int) : Route("labplay:$n")
 }
@@ -115,6 +116,7 @@ class Navigator {
     fun openSettings() = push(Route.Settings)
     fun openSources() = push(Route.Sources)
     fun openPans() = push(Route.Pans)
+    fun openDownloads() = push(Route.Downloads)
     fun playLive(group: Int, channel: Int) = push(Route.LivePlay(group, channel, ++seq))
     fun playUrl(title: String, url: String, headers: Map<String, String>, parse: Boolean, format: String? = null) =
         push(Route.LabPlay(title, url, headers, parse, format, ++seq))
@@ -184,6 +186,7 @@ fun AppNav() {
                         Route.Settings -> SettingsScreen()
                         Route.Sources -> SourcesScreen()
                         Route.Pans -> PansScreen()
+                        Route.Downloads -> SettingsScreen() // 电视上不下载，没有入口
                         is Route.LivePlay -> LivePlayer(r)
                         is Route.LabPlay -> LabPlayer(r)
                     }

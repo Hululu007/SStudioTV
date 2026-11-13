@@ -2,11 +2,14 @@ package dev.personal.tv.spider
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,6 +49,14 @@ import dev.personal.tv.source.VodJson
 import dev.personal.tv.ui.components.Focusable
 import dev.personal.tv.ui.components.Hint
 import dev.personal.tv.ui.components.T
+import dev.personal.tv.ui.phone.Divider
+import dev.personal.tv.ui.phone.Empty
+import dev.personal.tv.ui.phone.PC
+import dev.personal.tv.ui.phone.PhoneTheme
+import dev.personal.tv.ui.phone.PillRow
+import dev.personal.tv.ui.phone.TopBar
+import dev.personal.tv.ui.phone.Tx
+import dev.personal.tv.ui.phone.UiMode
 import dev.personal.tv.ui.theme.AppTheme
 import dev.personal.tv.ui.theme.Dimens
 import dev.personal.tv.ui.theme.Palette
@@ -73,8 +84,12 @@ class PluginSettingsActivity : ComponentActivity() {
         val api = i.getStringExtra("api") ?: return finish()
         val ext = i.getStringExtra("ext").orEmpty()
         val name = i.getStringExtra("name") ?: "插件设置"
+        // 手机：竖屏、触屏布局；电视：横屏、遥控器布局
+        val phone = i.getBooleanExtra("phone", false)
+        requestedOrientation = if (phone) UiMode.browseOrientation(this) else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         setContent {
-            AppTheme { Screen(name) { JarLoader.spider(applicationContext, jar, md5, key, api, ext) } }
+            if (phone) PhoneTheme { Screen(name, true) { JarLoader.spider(applicationContext, jar, md5, key, api, ext) } }
+            else AppTheme { Screen(name, false) { JarLoader.spider(applicationContext, jar, md5, key, api, ext) } }
         }
     }
 
@@ -84,7 +99,7 @@ class PluginSettingsActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Screen(title: String, load: () -> Spider) {
+    private fun Screen(title: String, phone: Boolean, load: () -> Spider) {
         val scope = rememberCoroutineScope()
         var sp by remember { mutableStateOf<Spider?>(null) }
         var err by remember { mutableStateOf<String?>(null) }
@@ -120,7 +135,7 @@ class PluginSettingsActivity : ComponentActivity() {
                 withContext(Dispatchers.IO) { runCatching { VodJson.page(s.categoryContent(c, "1", true, HashMap()).orEmpty()).list }.getOrDefault(emptyList()) }
             }
         }
-        LaunchedEffect(classes) { if (classes.isNotEmpty() || home.isNotEmpty()) { delay(80); runCatching { first.requestFocus() } } }
+        LaunchedEffect(classes) { if (!phone && (classes.isNotEmpty() || home.isNotEmpty())) { delay(80); runCatching { first.requestFocus() } } }
 
         fun open(v: Vod) {
             val s = sp ?: return
@@ -138,6 +153,11 @@ class PluginSettingsActivity : ComponentActivity() {
                 delay(600)
                 focusTick++
             }
+        }
+
+        if (phone) {
+            PhoneLayout(title, err, sp != null, home.isNotEmpty(), classes, cls, items, note, busy, { cls = it }, ::open)
+            return
         }
 
         Row(
@@ -174,6 +194,48 @@ class PluginSettingsActivity : ComponentActivity() {
         }
     }
 
+    /** 手机：顶栏 + 分类标签 + 列表，点一项插件弹对话框 */
+    @Composable
+    private fun PhoneLayout(
+        title: String, err: String?, loaded: Boolean, hasHome: Boolean, classes: List<VodClass>, cls: String?,
+        items: List<Vod>, note: String, busy: Boolean, pick: (String?) -> Unit, open: (Vod) -> Unit,
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            TopBar(title, "插件自带的设置中心", onBack = { finish() })
+            val tabs = (if (hasHome) listOf<VodClass?>(null) else emptyList()) + classes
+            if (tabs.size > 1) {
+                PillRow(tabs.map { it?.name ?: "总览" }, tabs.indexOfFirst { it?.id == cls }.coerceAtLeast(0), Modifier.padding(bottom = 6.dp), strong = true) { pick(tabs[it]?.id) }
+            }
+            if (note.isNotBlank()) {
+                Tx(
+                    note, 13.sp, Palette.T2, lines = 5, lineHeight = 19.sp,
+                    modifier = Modifier.padding(horizontal = PC.Edge, vertical = 6.dp).fillMaxWidth()
+                        .background(PC.Card, RoundedCornerShape(10.dp)).padding(12.dp),
+                )
+            }
+            when {
+                err != null -> Empty("插件打不开", err)
+                !loaded -> Empty("正在加载插件…")
+                items.isEmpty() -> Empty("这一栏是空的")
+                else -> LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
+                    items(items, key = { it.id }) { v ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable(enabled = !busy) { open(v) }.padding(horizontal = PC.Edge, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Tx(v.name, 15.5.sp, weight = FontWeight.Medium, lines = 2)
+                                if (v.remarks.isNotBlank()) Tx(v.remarks, 12.sp, Palette.T3, lines = 2, modifier = Modifier.padding(top = 2.dp))
+                            }
+                            Tx("›", 20.sp, Palette.T3, modifier = Modifier.padding(start = 8.dp))
+                        }
+                        Divider()
+                    }
+                }
+            }
+        }
+    }
+
     @Composable
     private fun Row1(title: String, sub: String?, on: Boolean, modifier: Modifier, onFocus: (() -> Unit)? = null, onClick: () -> Unit) {
         Focusable(onClick, modifier.fillMaxWidth(), corner = 9.dp, scale = 1.02f, ring = false, onFocus = onFocus) { f ->
@@ -197,7 +259,7 @@ class PluginSettingsActivity : ComponentActivity() {
 
         fun open(ctx: Context, jar: String, md5: String?, site: SiteCfg) {
             ctx.startActivity(
-                Intent(ctx, PluginSettingsActivity::class.java)
+                Intent(ctx, PluginSettingsActivity::class.java).putExtra("phone", UiMode.phone(ctx))
                     .putExtra("jar", jar).putExtra("md5", md5)
                     .putExtra("key", site.key).putExtra("api", site.api).putExtra("ext", site.ext)
                     .putExtra("name", site.name.replace(Regex("[^\\p{L}\\p{N} ]"), "").trim().ifEmpty { "插件设置" })

@@ -17,7 +17,18 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
-import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.common.C
+import androidx.media3.common.PriorityTaskManager
+import androidx.media3.common.util.UriUtil
+import androidx.media3.datasource.cache.CacheWriter
+import androidx.media3.exoplayer.dash.offline.DashDownloader
+import androidx.media3.exoplayer.hls.HlsManifest
+import androidx.media3.exoplayer.hls.offline.HlsDownloader
+import androidx.media3.exoplayer.offline.Download
+import androidx.media3.exoplayer.offline.Downloader
+import androidx.media3.exoplayer.offline.ProgressiveDownloader
+import dev.personal.tv.media.Downloads
+import dev.personal.tv.media.MediaCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import dev.personal.tv.audio.AudioFx
@@ -40,8 +51,12 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Request
@@ -54,7 +69,9 @@ import okhttp3.Request
 class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startName: String?, private val scope: CoroutineScope) {
     private val TAG = "Play"
     // 耳机、蓝牙音箱断开时暂停，不突然从电视喇叭外放
-    val player: ExoPlayer = ExoPlayer.Builder(ctx, AudioFx.renderers(ctx)).setHandleAudioBecomingNoisy(true).build()
+    // 和后台下载共用优先级：播放器加载时后台下载先让路
+    val player: ExoPlayer = ExoPlayer.Builder(ctx, AudioFx.renderers(ctx)).setHandleAudioBecomingNoisy(true)
+        .build()
     /** 这部片的线路；断网时一条没搜到，重试时换成重新搜的 */
     var set: LineSet by mutableStateOf(Lines.find(ctx, t))
         private set
@@ -133,6 +150,21 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     private var autoPlays = 0
     private var lastTouch = System.currentTimeMillis()
 
+    /** 预缓存进度（「本集 40%」「下一集 12%」「下一集已缓存好」），没在预缓存 = null */
+    var prefetchText by mutableStateOf<String?>(null)
+        private set
+    private var prefetchJob: Job? = null
+    /** 这一集已经顺利播了多久：播够 15 秒再开始预缓存，别跟起播抢网速 */
+    private var playedMs = 0L
+    /** 预缓存时解析好的下一集地址：真放下一集时直接用（同一个地址才能用上缓存） */
+    private class Pre(val lineKey: String, val epUrl: String, val info: PlayInfo, val at: Long)
+    private var pre: Pre? = null
+    /** 当前在播的地址的请求头（预缓存要带上） */
+    private var curHeaders: Map<String, String> = emptyMap()
+    /** 本地下载好的集，做成一条「线路」；没有下载 = null */
+    private var local: PlayLine? = null
+    private val localDl = HashMap<String, Pair<Downloads.Meta, Download>>()
+
     /** 当前线路的集数（没线路时按豆瓣） */
     val episodeCount get() = line?.episodes?.size ?: maxOf(t.airedEps, 1)
 
@@ -184,6 +216,19 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
                     System.currentTimeMillis() - bufferingSince > STALL_S * 1000L
                 ) { bufferingSince = 0; failover("卡住超过 20 秒") }
                 if (++tick % 20 == 0 && player.isPlaying) save()
+                if (player.isPlaying) playedMs += 500
+                // 播放器缺缓冲（在找线路、起播、缓冲不到 15 秒）时，预缓存和下载先停，网速全给播放
+                val ahead = player.bufferedPosition - player.currentPosition
+                val starving = fail == null && !hidden && when (phase) {
+                    Phase.FIND -> false
+                    Phase.RESOLVE, Phase.BUFFER -> true
+                    Phase.PLAY -> player.playWhenReady && player.playbackState != Player.STATE_ENDED &&
+                        ahead < (if (hungry) 25_000 else 15_000)
+                }
+                if (starving != hungry) { hungry = starving; MediaCache.playerHungry(this@PlaySession, starving) }
+                if (prefetchJob == null && phase == Phase.PLAY && playedMs >= 15_000 && Prefs.precache && !hidden &&
+                    line?.siteKey != LOCAL && !MediaCache.metered()
+                ) prefetchJob = scope.launch { prefetch() }
             }
         }
     }
@@ -191,6 +236,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     /** 从头开始（换集、手动换线、自动换线都走这里）。[first]：先试这一条，不行再按平常的顺序换 */
     private fun start(ep: Int, startMs: Long, prefer: String?, only: PlayLine? = null, first: PlayLine? = null) {
         job?.cancel()
+        stopPrefetch()
         this.ep = ep
         enter(Phase.FIND)
         manual = only != null
@@ -276,6 +322,8 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
 
     /** App 在后台（主页键、屏保）：正在找线路、解析的，加载好了也先别播 */
     private var hidden = false
+    /** 播放器缺缓冲，后台下载在让路 */
+    private var hungry = false
 
     /**
      * 退到后台：已经在播的停掉播放器（不在后台出声，也把硬件解码器让给别的 App），记下位置；
@@ -335,7 +383,10 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
 
     fun release() {
         save()
+        hungry = false
+        MediaCache.playerHungry(this, false)
         job?.cancel()
+        stopPrefetch()
         player.release()
     }
 
@@ -365,6 +416,17 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     }
 
     private suspend fun run(startMs: Long, prefer: String?, only: PlayLine?, first: PlayLine?) {
+        // 下载好的集先放本地的：不用联网、不用找线路（飞机上）
+        loadLocal()
+        val lc = local?.takeIf { only == null || only.key == it.key }?.takeIf { it.key !in tried && indexIn(it) != null }
+        if (lc != null) {
+            tried += lc.key
+            val i = indexIn(lc)!!
+            ep = i
+            epName = lc.episodes[i - 1].name
+            if (tryLine(null, lc, lc.episodes[i - 1], startMs)) return
+            set.failed.remove(lc.key)
+        }
         val c = cfg ?: try {
             Sources.config().also { cfg = it }
         } catch (e: Throwable) {
@@ -447,14 +509,19 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         }
     }
 
-    private suspend fun tryLine(c: TvConfig, l: PlayLine, e: Episode, startMs: Long): Boolean {
+    private suspend fun tryLine(c: TvConfig?, l: PlayLine, e: Episode, startMs: Long): Boolean {
         line = l
+        if (l.siteKey == LOCAL) return tryLocal(l, e, startMs)
+        c ?: return false
         status = "正在解析 · ${l.siteName} · ${l.flag}"
         enter(Phase.RESOLVE)
         player.stop()
         val t0 = System.currentTimeMillis()
         var why = "解析不出视频地址"
-        val info = try {
+        // 预缓存时已经解析好、下了一部分的：直接用同一个地址
+        val reuse = pre?.takeIf { it.lineKey == l.key && it.epUrl == e.url && System.currentTimeMillis() - it.at < 3 * 3600_000L }
+        pre = null
+        val info = if (reuse != null) reuse.info else try {
             withTimeoutOrNull(RESOLVE_S * 1000L) { Lines.yieldTo { resolve(c, l, e) } }
         } catch (x: Throwable) {
             Log.w(TAG, "resolve ${l.key}", x)
@@ -472,11 +539,11 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         }
         status = "缓冲中…"
         enter(Phase.BUFFER)
-        val fmt = withContext(Dispatchers.IO) { format(info) }
-        val ua = info.headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value
-        val ds = OkHttpDataSource.Factory(Net.client).setTransferListener(meter)
-            .setUserAgent(ua ?: "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/120 Safari/537.36")
-            .setDefaultRequestProperties(info.headers.filterKeys { !it.equals("User-Agent", true) })
+        val fmt = info.format ?: withContext(Dispatchers.IO) { formatOf(info) }
+        info.format = fmt
+        curHeaders = info.headers
+        // 边放边存进磁盘缓存：预缓存下好的部分直接从缓存读
+        val ds = MediaCache.factory(info.headers, MediaCache.play, meter)
         val item = MediaItem.Builder().setUri(info.url).apply {
             when (fmt) {
                 "dash" -> setMimeType(MimeTypes.APPLICATION_MPD)
@@ -492,6 +559,11 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         player.playWhenReady = !hidden
         val ok = withTimeoutOrNull(READY_S * 1000L) { r.await() } ?: false
         ready = null
+        if (!ok && reuse != null) {
+            // 预缓存时拿到的地址过期了：重新解析一次
+            player.stop()
+            return tryLine(c, l, e, startMs)
+        }
         if (!ok) {
             set.failed.putIfAbsent(l.key, "播放失败")
             Log.i(TAG, "✗ ${l.key} 播放失败 ${info.url.take(80)}")
@@ -506,14 +578,173 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         return true
     }
 
-    private suspend fun resolve(c: TvConfig, l: PlayLine, e: Episode): PlayInfo? {
-        val s = c.sites.firstOrNull { it.key == l.siteKey } ?: return null
-        val api = withContext(Dispatchers.IO) { Sites.get(ctx, c, s) }
-        val p = withContext(Dispatchers.IO) { api.play(l.flag, e.url) }
-        if (!p.parse && !p.jx) return p
-        status = "网页解析 · ${l.siteName} · ${l.flag}"
-        return Parser.resolve(ctx, c, l.flag, p, withContext(Dispatchers.IO) { api.videoCheck() })?.info
+    /** 查这部片下载好的集，做成一条本地线路 */
+    private suspend fun loadLocal() {
+        val list = runCatching { Downloads.completed(t.id) }.getOrDefault(emptyList())
+        localDl.clear()
+        if (list.isEmpty()) { local = null; return }
+        // 不同线路下的同一集只留一个
+        val eps = ArrayList<Episode>()
+        for ((m, d) in list.sortedBy { Eps.number(it.first.epName, t.name) ?: it.first.epIdx }) {
+            if (eps.any { Eps.same(it.name, m.epName, t.name) }) continue
+            eps += Episode(m.epName, d.request.id)
+            localDl[d.request.id] = m to d
+        }
+        local = PlayLine(LOCAL, "已下载", "本地", t.name, "", eps)
     }
+
+    private suspend fun tryLocal(l: PlayLine, e: Episode, startMs: Long): Boolean {
+        val (m, d) = localDl[e.url] ?: return false
+        status = "缓冲中…"
+        enter(Phase.BUFFER)
+        player.stop()
+        curHeaders = m.headers
+        val ds = MediaCache.factory(m.headers, MediaCache.downloads, meter)
+        val r = CompletableDeferred<Boolean>()
+        ready = r
+        bufferingSince = 0
+        player.setMediaSource(DefaultMediaSourceFactory(ds).createMediaSource(d.request.toMediaItem()), startMs)
+        player.setPlaybackSpeed(speed)
+        player.prepare()
+        player.playWhenReady = !hidden
+        val ok = withTimeoutOrNull(READY_S * 1000L) { r.await() } ?: false
+        ready = null
+        if (!ok) {
+            Log.i(TAG, "✗ 本地 ${m.epName}")
+            set.failed[l.key] = "本地文件放不了"
+            player.stop()
+            return false
+        }
+        status = null
+        enter(Phase.PLAY)
+        Log.i(TAG, "✓ 本地 ${m.epName}")
+        save()
+        return true
+    }
+
+    private fun stopPrefetch() {
+        prefetchJob?.cancel()
+        prefetchJob = null
+        playedMs = 0
+        prefetchText = null
+    }
+
+    /**
+     * 预缓存：先把这一集当前位置往后的分片（HLS）存进缓存，再解析下一集、整集下到缓存里。
+     * 都走后台优先级：播放器在加载时停下来等。换集、换线、退出时取消；已经存下的留在缓存里。
+     */
+    private suspend fun prefetch() {
+        // PriorityTaskManager 只放行「登记过的最高优先级」：自己不登记的话一直等下去
+        MediaCache.priority.add(C.PRIORITY_DOWNLOAD)
+        try { prefetchBody() } finally { MediaCache.priority.remove(C.PRIORITY_DOWNLOAD) }
+    }
+
+    private suspend fun prefetchBody() {
+        val l = line ?: return
+        val c = cfg ?: return
+        val f = MediaCache.factory(curHeaders, MediaCache.play, background = true)
+        // 1. 这一集后面的部分
+        val m = player.currentManifest as? HlsManifest
+        val pl = m?.mediaPlaylist
+        if (pl != null && pl.hasEndTag) {
+            val posUs = player.currentPosition * 1000
+            val segs = pl.segments.filter { it.relativeStartTimeUs + it.durationUs > posUs }
+            Log.i(TAG, "prefetch: 本集还剩 ${segs.size} 个分片")
+            var bad = 0
+            for ((k, sg) in segs.withIndex()) {
+                prefetchText = "本集 ${k * 100 / segs.size.coerceAtLeast(1)}%"
+                val spec = DataSpec.Builder().setUri(UriUtil.resolveToUri(pl.baseUri, sg.url))
+                    .setPosition(sg.byteRangeOffset).setLength(sg.byteRangeLength).build()
+                val t0 = System.currentTimeMillis()
+                val okSeg = cacheOne(f, spec)
+                if (k % 50 == 0 || !okSeg) Log.d(TAG, "prefetch: 分片 $k/${segs.size} ${if (okSeg) "ok" else "失败"} ${System.currentTimeMillis() - t0}ms")
+                bad = if (okSeg) 0 else bad + 1
+                if (bad >= 3) { Log.i(TAG, "prefetch: 本集分片连着失败，停"); break }
+            }
+        }
+        // 2. 下一集（同一条线路里有的才下）
+        val n = nextName ?: run { prefetchText = null; return }
+        val i = Eps.indexOf(l.episodes, n, t.name).takeIf { it >= 0 } ?: run { prefetchText = null; return }
+        val e = l.episodes[i]
+        prefetchText = "正在解析下一集"
+        val info = runCatching { withTimeoutOrNull(RESOLVE_S * 1000L) { resolveInfo(ctx, c, l.siteKey, l.flag, e.url) } }.getOrNull()
+        if (info == null) { prefetchText = null; return }
+        val fmt = info.format ?: withContext(Dispatchers.IO) { formatOf(info) }
+        info.format = fmt
+        pre = Pre(l.key, e.url, info, System.currentTimeMillis())
+        val nf = MediaCache.factory(info.headers, MediaCache.play, background = true)
+        val item = MediaItem.Builder().setUri(info.url).apply {
+            when (fmt) {
+                "hls" -> setMimeType(MimeTypes.APPLICATION_M3U8)
+                "dash" -> setMimeType(MimeTypes.APPLICATION_MPD)
+            }
+        }.build()
+        val d: Downloader = when (fmt) {
+            "hls" -> HlsDownloader(item, nf)
+            "dash" -> DashDownloader(item, nf)
+            else -> ProgressiveDownloader(item, nf)
+        }
+        prefetchText = "下一集 0%"
+        val job = kotlin.coroutines.coroutineContext[Job]
+        val h = job?.invokeOnCompletion { d.cancel() }
+        try {
+            runInterruptible(Dispatchers.IO) {
+                d.download { _, _, pct -> if (pct >= 0) prefetchText = "下一集 ${pct.toInt()}%" }
+            }
+            prefetchText = "下一集已缓存好"
+            Log.i(TAG, "prefetch: 下一集「${e.name}」缓存好了")
+        } catch (x: kotlinx.coroutines.CancellationException) {
+            throw x
+        } catch (x: Throwable) {
+            Log.w(TAG, "prefetch next", x)
+            prefetchText = null
+        } finally {
+            h?.dispose()
+        }
+    }
+
+    /**
+     * 存一个分片；播放器缺缓冲时先等它。30 秒一个字节都没进来就放弃这一片（别让预缓存卡死在一个分片上）。
+     */
+    private suspend fun cacheOne(f: androidx.media3.datasource.cache.CacheDataSource.Factory, spec: DataSpec): Boolean = coroutineScope {
+        val last = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+        val got = java.util.concurrent.atomic.AtomicLong(0)
+        val yielding = java.util.concurrent.atomic.AtomicBoolean(false)
+        val work = async(Dispatchers.IO) {
+            runInterruptible {
+                val ds = f.createDataSourceForDownloading()
+                while (true) {
+                    val w = CacheWriter(ds, spec, null) { _, done, _ ->
+                        if (done != got.get()) { got.set(done); last.set(System.currentTimeMillis()) }
+                    }
+                    try { w.cache(); break }
+                    catch (_: PriorityTaskManager.PriorityTooLowException) {
+                        yielding.set(true)
+                        Log.d(TAG, "prefetch: 播放器缺缓冲，先等")
+                        try { MediaCache.priority.proceed(C.PRIORITY_DOWNLOAD) } finally { yielding.set(false) }
+                        last.set(System.currentTimeMillis())
+                    }
+                }
+            }
+        }
+        while (work.isActive) {
+            if (withTimeoutOrNull(1000) { work.join() } != null) break
+            if (yielding.get()) last.set(System.currentTimeMillis())
+            else if (System.currentTimeMillis() - last.get() > 30_000) {
+                Log.d(TAG, "prefetch: 分片 30 秒没进展（已存 ${got.get() / 1024} KB），跳过")
+                work.cancel()
+            }
+        }
+        try { work.await(); true }
+        catch (x: Throwable) {
+            if (x is kotlinx.coroutines.CancellationException && !isActive) throw x
+            Log.d(TAG, "prefetch: 分片失败 ${x.javaClass.simpleName} ${x.message?.take(80)}")
+            false
+        }
+    }
+
+    private suspend fun resolve(c: TvConfig, l: PlayLine, e: Episode): PlayInfo? =
+        resolveInfo(ctx, c, l.siteKey, l.flag, e.url) { status = "网页解析 · ${l.siteName} · ${l.flag}" }
 
     /**
      * 加载时状态下面那行小字：第几条线路、等了几秒、下载速度、已缓冲多少、几秒后自动换线。
@@ -557,6 +788,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             val parts = mutableListOf<String>()
             parts += if (ahead > 0) "已缓冲 ${aheadText(ahead)}" else "还没缓冲"
             if (player.isLoading) parts += speedText(rate)
+            prefetchText?.let { parts += "预缓存 $it" }
             parts += clock.format(java.util.Date(now))
             return parts.joinToString(" · ")
         }
@@ -565,28 +797,6 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         val s = ((now - since) / 1000).toInt()
         if (s < 1) return null
         return "缓冲中 · ${speedText(rate)} · 已卡 $s 秒" + if (Prefs.autoLine && s >= 5 && s < STALL_S) "，${STALL_S - s} 秒后换线" else ""
-    }
-
-    /** 地址没扩展名时探一下开头几个字节，HLS/DASH 要告诉播放器 */
-    private fun format(p: PlayInfo): String? {
-        val u = p.url.lowercase()
-        if (".m3u8" in u) return "hls"
-        if (".mpd" in u) return "dash"
-        if (Regex("\\.(mp4|mkv|flv|avi|mov)(\\?|$)").containsMatchIn(u)) return null
-        return runCatching {
-            val req = Request.Builder().url(p.url).header("Range", "bytes=0-2047")
-            p.headers.forEach { (k, v) -> req.header(k, v) }
-            if (p.headers.keys.none { it.equals("User-Agent", true) }) req.header("User-Agent", "Mozilla/5.0 (Linux; Android 12) Chrome/120")
-            Net.client.newBuilder().callTimeout(8, java.util.concurrent.TimeUnit.SECONDS).build()
-                .newCall(req.build()).execute().use { r ->
-                    val head = r.body?.byteStream()?.let { s -> ByteArray(2048).let { b -> String(b, 0, s.read(b).coerceAtLeast(0)) } }.orEmpty()
-                    when {
-                        head.startsWith("#EXTM3U") -> "hls"
-                        "<MPD" in head -> "dash"
-                        else -> null
-                    }
-                }
-        }.getOrNull()
     }
 
     companion object {
@@ -604,5 +814,40 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         fun aheadText(s: Int) = if (s < 60) "$s 秒" else "${s / 60} 分 %02d 秒".format(s % 60)
 
         private val clock = java.text.SimpleDateFormat("HH:mm", java.util.Locale.CHINA)
+
+        /** 本地下载的「线路」 */
+        const val LOCAL = "local"
+
+        /** 站点 / 插件给出这一集的播放地址；要网页解析的走解析（[onParse] 给界面换提示） */
+        suspend fun resolveInfo(ctx: Context, c: TvConfig, siteKey: String, flag: String, url: String, onParse: () -> Unit = {}): PlayInfo? {
+            val s = c.sites.firstOrNull { it.key == siteKey } ?: return null
+            val api = withContext(Dispatchers.IO) { Sites.get(ctx, c, s) }
+            val p = withContext(Dispatchers.IO) { api.play(flag, url) }
+            if (!p.parse && !p.jx) return p
+            onParse()
+            return Parser.resolve(ctx, c, flag, p, withContext(Dispatchers.IO) { api.videoCheck() })?.info
+        }
+
+        /** 地址没扩展名时探一下开头几个字节，HLS/DASH 要告诉播放器 */
+        fun formatOf(p: PlayInfo): String? {
+            val u = p.url.lowercase()
+            if (".m3u8" in u) return "hls"
+            if (".mpd" in u) return "dash"
+            if (Regex("\\.(mp4|mkv|flv|avi|mov)(\\?|$)").containsMatchIn(u)) return null
+            return runCatching {
+                val req = Request.Builder().url(p.url).header("Range", "bytes=0-2047")
+                p.headers.forEach { (k, v) -> req.header(k, v) }
+                if (p.headers.keys.none { it.equals("User-Agent", true) }) req.header("User-Agent", "Mozilla/5.0 (Linux; Android 12) Chrome/120")
+                Net.client.newBuilder().callTimeout(8, java.util.concurrent.TimeUnit.SECONDS).build()
+                    .newCall(req.build()).execute().use { r ->
+                        val head = r.body?.byteStream()?.let { s -> ByteArray(2048).let { b -> String(b, 0, s.read(b).coerceAtLeast(0)) } }.orEmpty()
+                        when {
+                            head.startsWith("#EXTM3U") -> "hls"
+                            "<MPD" in head -> "dash"
+                            else -> null
+                        }
+                    }
+            }.getOrNull()
+        }
     }
 }

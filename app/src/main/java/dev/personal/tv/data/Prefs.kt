@@ -21,6 +21,18 @@ object Prefs {
         get() = _autoLine
         set(v) { _autoLine = v; sp?.edit()?.putBoolean("autoLine", v)?.apply() }
 
+    private var _precache by mutableStateOf(true)
+    /** 预缓存：播起来以后在后台把这一集后面的部分和下一集下到缓存里（用流量时不下） */
+    var precache: Boolean
+        get() = _precache
+        set(v) { _precache = v; sp?.edit()?.putBoolean("precache", v)?.apply() }
+
+    private var _dlMetered by mutableStateOf(false)
+    /** 离线下载用手机流量也下（默认只用 Wi‑Fi） */
+    var dlMetered: Boolean
+        get() = _dlMetered
+        set(v) { _dlMetered = v; sp?.edit()?.putBoolean("dlMetered", v)?.apply() }
+
     private var _posterSize by mutableIntStateOf(1)
     /** 海报大小：0 小、1 中、2 大。网格少一列 / 多一列，首页热门的海报跟着变 */
     var posterSize: Int
@@ -60,6 +72,8 @@ object Prefs {
         val p = ctx.getSharedPreferences("prefs", Context.MODE_PRIVATE)
         sp = p
         _autoLine = p.getBoolean("autoLine", true)
+        _precache = p.getBoolean("precache", true)
+        _dlMetered = p.getBoolean("dlMetered", false)
         _posterSize = p.getInt("posterSize", 1).coerceIn(0, 2)
         preferred.addAll(p.getString("preferred", "").orEmpty().split('\n').filter { it.isNotEmpty() })
         blocked.addAll(p.getString("blocked", "").orEmpty().split('\n').filter { it.isNotEmpty() })

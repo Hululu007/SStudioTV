@@ -234,6 +234,11 @@ private fun PlayButtons(t: Title, p: Progress?, ref: PlayLine?, toSimilar: () ->
                 }
                 else -> {}
             }
+            if (n > 0) {
+                var dl by remember { mutableStateOf(false) }
+                BigButton(Modifier.weight(1f), height = 42.dp, onClick = { dl = true }) { fg -> Tx("下载", 14.sp, fg, FontWeight.SemiBold) }
+                if (dl) DownloadSheet(t) { dl = false }
+            }
             BigButton(Modifier.weight(1f), height = 42.dp, onClick = toSimilar) { fg -> Tx("找类似", 14.sp, fg, FontWeight.SemiBold) }
         }
         if (n == 0 && !searching && !Sources.empty) {

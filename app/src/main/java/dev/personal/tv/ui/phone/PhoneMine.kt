@@ -148,6 +148,27 @@ fun PhoneMine(header: Boolean = true) {
             SettingRow("对白增强", "人声频段略微提亮", onClick = { dialog = !dialog; PlayerPrefs.dialogBoost = dialog }) {
                 PhoneSwitch(dialog) { dialog = it; PlayerPrefs.dialogBoost = it }
             }
+            Divider()
+            SettingRow("预缓存", "播起来以后，后台把这集后面的部分和下一集存好，网慢也不卡；用流量时不存", onClick = { Prefs.precache = !Prefs.precache }) {
+                PhoneSwitch(Prefs.precache) { Prefs.precache = it }
+            }
+        }
+
+        Group("下载")
+        Card {
+            val dl = dev.personal.tv.media.Downloads.all()
+            SettingRow(
+                "下载的片",
+                if (dl.isEmpty()) "详情页点「下载」，没网也能看（飞机上）"
+                else "${dl.count { it.done }}/${dl.size} 集下好 · 占用 ${sizeText(dl.sumOf { it.bytes })}",
+                onClick = { nav.openDownloads() },
+            ) { Arrow() }
+            Divider()
+            SettingRow("用流量也下载", "关着时只在 Wi‑Fi 下下载", onClick = {
+                Prefs.dlMetered = !Prefs.dlMetered; dev.personal.tv.media.Downloads.applyRequirements()
+            }) {
+                PhoneSwitch(Prefs.dlMetered) { Prefs.dlMetered = it; dev.personal.tv.media.Downloads.applyRequirements() }
+            }
         }
 
         Group("界面")
