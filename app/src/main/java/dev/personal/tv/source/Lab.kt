@@ -239,10 +239,10 @@ suspend fun Lab.dump(ctx: Context, cfgUrl: String, key: String) = kotlinx.corout
     val s = c.sites.first { it.key == key.substringBefore('@') || it.api == key.substringBefore('@') }
     val api = Sites.get(ctx, c, s)
     val home = api.home()
-    Log.i("Dump", "classes ${home.classes.joinToString { it.id + ":" + it.name }}")
+    Log.i("Dump", "classes ${home.classes.joinToString { it.id + ":" + it.name }} · ratio=${home.ratio}")
     val list = if (cls.isNotEmpty()) api.category(cls, 1).list else home.list.ifEmpty { home.classes.firstOrNull()?.let { api.category(it.id, 1).list }.orEmpty() }
     for (v in list) {
-        Log.i("Dump", "VOD ${v.id} | ${v.name} | ${v.remarks}")
+        Log.i("Dump", "VOD ${v.id} | ${v.name} | ${v.remarks}" + (if (v.tag.isNotEmpty() || v.ratio != null) " · tag=${v.tag} ratio=${v.ratio}" else ""))
         val d = runCatching { api.detail(v.id) }.getOrElse { Log.i("Dump", "  detail ✗ ${it.message}"); null } ?: run { Log.i("Dump", "  detail null"); null } ?: continue
         Log.i("Dump", "  desc ${d.content.take(300)}")
         for (f in d.flags) {

@@ -25,9 +25,16 @@ data class Vod(
     val actor: String,
     val content: String,
     val flags: List<PlayFlag>,
-)
+    /** 影视仓的 vod_tag：「folder」是文件夹（B站个人中心、媒体库、网盘分享的目录），点开是下一层列表，不是详情 */
+    val tag: String = "",
+    /** 海报宽高比（宽 / 高），插件用 style 指定；null = 默认竖版 */
+    val ratio: Float? = null,
+) {
+    val folder get() = tag == "folder"
+}
 
-data class VodPage(val classes: List<VodClass>, val list: List<Vod>)
+/** [ratio]：整页海报的宽高比（插件给的 style），null = 默认竖版 2:3 */
+data class VodPage(val classes: List<VodClass>, val list: List<Vod>, val ratio: Float? = null)
 
 /** 播放解析结果。parse = true 表示 url 还是网页，需要再嗅探/解析 */
 data class PlayInfo(val url: String, val headers: Map<String, String>, val parse: Boolean, val jx: Boolean) {
@@ -45,7 +52,21 @@ object VodJson {
         val classes = o.arr("class").mapNotNull { it.obj() }.map {
             VodClass(it.str("type_id").orEmpty(), it.str("type_name").orEmpty())
         }
-        return VodPage(classes, o.arr("list").mapNotNull { it.obj() }.map(::vod))
+        return VodPage(classes, o.arr("list").mapNotNull { it.obj() }.map(::vod), style(o))
+    }
+
+    /**
+     * 影视仓的 style：{"type":"rect","ratio":1.33} 横版、{"type":"oval"} 圆形、{"type":"list"} 列表。ratio 是宽 / 高。
+     * 插件的「海报样式」设置（横版海报）就是靠它。
+     */
+    private fun style(o: JsonObject): Float? {
+        val s = o.get("style")?.obj() ?: return null
+        return when (s.str("type")) {
+            "rect" -> runCatching { s.get("ratio")?.asFloat }.getOrNull()?.takeIf { it in 0.3f..3f } ?: 0.75f
+            "oval" -> 1f
+            "list" -> 1.6f
+            else -> null
+        }
     }
 
     /**
@@ -103,6 +124,8 @@ object VodJson {
             actor = o.str("vod_actor").orEmpty(),
             content = o.str("vod_content").orEmpty().replace(Regex("<[^>]+>"), "").trim(),
             flags = flags,
+            tag = o.str("vod_tag").orEmpty(),
+            ratio = style(o),
         )
     }
 }

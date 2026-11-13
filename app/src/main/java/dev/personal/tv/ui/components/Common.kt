@@ -195,9 +195,11 @@ fun PosterCard(
     onFocus: (() -> Unit)? = null,
     showWish: Boolean = false,
     badge: String? = null,
+    /** 宽 / 高，默认竖版 2:3；插件的横版海报、文件夹给别的比例 */
+    ratio: Float = 2f / 3f,
 ) {
     val dim = t.lines == 0
-    Focusable(onClick, modifier.aspectRatio(2f / 3f), corner = corner, onMenu = onMenu, onFocus = onFocus) {
+    Focusable(onClick, modifier.aspectRatio(ratio), corner = corner, onMenu = onMenu, onFocus = onFocus) {
         PosterArt(
             t, titleSize,
             Modifier.fillMaxSize().then(
@@ -242,11 +244,12 @@ fun PosterCell(
     badge: String? = null,
     /** 挂在可聚焦的海报本体上（焦点记忆、FocusRequester 之类），外层 Column 拿不到焦点 */
     focusModifier: Modifier = Modifier,
+    ratio: Float = 2f / 3f,
 ) {
     Column(modifier) {
         PosterCard(
             t, titleSize = if (t.name.length > 4) 11.sp else 12.sp, corner = 7.dp,
-            modifier = focusModifier.fillMaxWidth(), onClick = onClick, onMenu = onMenu, onFocus = onFocus, showWish = true, badge = badge,
+            modifier = focusModifier.fillMaxWidth(), onClick = onClick, onMenu = onMenu, onFocus = onFocus, showWish = true, badge = badge, ratio = ratio,
         )
         val a = if (t.lines == 0) 0.45f else 1f
         // 片名单独占两行（一行放不下的长片名、带副标题的不再被「…」吃掉），评分挪到下一行。

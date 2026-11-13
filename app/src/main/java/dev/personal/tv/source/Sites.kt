@@ -28,7 +28,7 @@ class CmsSite(private val cfg: SiteCfg) : SiteApi {
     override fun home(): VodPage {
         val p = VodJson.page(call("ac" to "list"))
         val list = runCatching { VodJson.page(call("ac" to "detail", "pg" to "1")).list }.getOrDefault(emptyList())
-        return VodPage(p.classes, list.ifEmpty { p.list })
+        return VodPage(p.classes, list.ifEmpty { p.list }, p.ratio)
     }
     override fun category(tid: String, page: Int) = VodJson.page(call("ac" to "detail", "t" to tid, "pg" to "$page"))
     override fun search(wd: String) = VodJson.page(call("ac" to "detail", "wd" to wd)).list
@@ -57,7 +57,7 @@ class CmsXmlSite(private val cfg: SiteCfg) : SiteApi {
     override fun home(): VodPage {
         val p = call("ac" to "list")
         val list = runCatching { call("ac" to "videolist", "pg" to "1").list }.getOrDefault(emptyList())
-        return VodPage(p.classes, list.ifEmpty { p.list })
+        return VodPage(p.classes, list.ifEmpty { p.list }, p.ratio)
     }
     override fun category(tid: String, page: Int) = call("ac" to "videolist", "t" to tid, "pg" to "$page")
     override fun search(wd: String) = call("ac" to "videolist", "wd" to wd).list
@@ -139,7 +139,7 @@ class JarSite(private val jar: String, private val md5: String?, private val cfg
         val p = VodJson.page(call("home"))
         if (p.list.isNotEmpty()) return p
         val more = runCatching { VodJson.page(call("homeVideo")).list }.getOrDefault(emptyList())
-        return if (more.isEmpty()) p else VodPage(p.classes, more)
+        return if (more.isEmpty()) p else VodPage(p.classes, more, p.ratio)
     }
     override fun category(tid: String, page: Int) = VodJson.page(call("category", tid, "$page"))
     override fun search(wd: String): List<Vod> {

@@ -1,6 +1,13 @@
 package dev.personal.tv.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +23,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,6 +77,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /** 首页这一栏的分类 id */
 private const val HOME = "\u0000home"
+/** 左栏第一项「豆瓣找片」 */
+private const val DOUBAN = "\u0000douban"
 
 /** 一个站点一个分类的列表，存在单例里：切走再回来不重拉 */
 private class SitePage {
@@ -74,6 +88,10 @@ private class SitePage {
     var loading by mutableStateOf(false)
     var end by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
+    /** 海报宽高比（插件的 style），null = 竖版 */
+    var ratio by mutableStateOf<Float?>(null)
+    /** 这一页里的文件夹：条目 id → 站点里的 vod_id（点开用 categoryContent 拉下一层） */
+    val folders = HashMap<String, String>()
 }
 
 private object SitePages {
@@ -88,9 +106,12 @@ private object SitePages {
 private fun browsable(s: SiteCfg) = s.kind.supported && s.key !in Prefs.blocked && s.notVideo != "工具"
 
 /**
- * 站点：像影视仓那样直接逛每个站点自己的首页和分类。短剧、B站、动漫、网盘分享这类按豆瓣片名配不上的内容在这里看；
+ * 找片：左栏第一项是「豆瓣找片」（[FindScreen]，按豆瓣榜单和筛选找），下面是当前片源的各个站点——
+ * 像影视仓那样直接逛每个站点自己的首页和分类。短剧、B站、动漫、网盘分享这类按豆瓣片名配不上的内容在站点里看；
  * 点开以后线路用这个站点自己的分集（见 [dev.personal.tv.source.Lines]），不按片名去别的站配。
+ * 站点给的文件夹（vod_tag=folder，B站个人中心、媒体库目录）点开是下一层列表，返回键回上一层。
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun SitesScreen(mem: FocusMemory) {
     val nav = LocalNav.current
@@ -102,16 +123,23 @@ fun SitesScreen(mem: FocusMemory) {
         err = null
         try { sites = Sources.config().sites.filter(::browsable) } catch (e: Throwable) { err = "片源配置加载失败：${e.message?.take(60)}" }
     }
-    var siteKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var siteKey by rememberSaveable { mutableStateOf(DOUBAN) }
     /** 左栏焦点停在哪个站点上：停 0.6 秒才切过去，免得上下翻的时候每个站都去拉一遍 */
     var hovered by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(hovered) { val h = hovered ?: return@LaunchedEffect; delay(600); siteKey = h }
     val list = sites
-    val site = list?.firstOrNull { it.key == siteKey } ?: list?.firstOrNull()
+    val site = list?.firstOrNull { it.key == siteKey }
+    val douban = site == null
     var cls by rememberSaveable(site?.key) { mutableStateOf(HOME) }
+    /** 点进去的文件夹，一层一行「vod_id\u0001名字」；从详情回来要还在，所以存成字符串 */
+    var trailS by rememberSaveable(site?.key, cls) { mutableStateOf("") }
+    val trail = trailS.split('\n').filter { it.isNotEmpty() }.map { it.substringBefore('\u0001') to it.substringAfter('\u0001') }
+    val folder = trail.lastOrNull()?.first
+    fun popFolder() { trailS = trail.dropLast(1).joinToString("\n") { "${it.first}\u0001${it.second}" } }
+    BackHandler(enabled = trail.isNotEmpty()) { popFolder() }
 
     val cfgUrl = Sources.url.orEmpty()
-    val page = remember(cfgUrl, site?.key, cls) { SitePages.get("$cfgUrl|${site?.key}|$cls") }
+    val page = remember(cfgUrl, site?.key, cls, folder) { SitePages.get("$cfgUrl|${site?.key}|$cls" + (folder?.let { "|f:$it" } ?: "")) }
     val head = remember(cfgUrl, site?.key) { SitePages.get("$cfgUrl|${site?.key}|$HOME") }
     val scope = rememberCoroutineScope()
 
@@ -130,15 +158,17 @@ fun SitesScreen(mem: FocusMemory) {
                 }
                 val got = withTimeoutOrNull(25_000) { job.await() } ?: error("站点 25 秒没回应")
                 if (c == HOME) p.classes = got.classes
-                android.util.Log.d("Sites", "${s.key} $c p${p.page + 1} · ${got.list.size} 条 · pic=${got.list.firstOrNull()?.pic?.take(160)}")
+                if (p.ratio == null) p.ratio = got.ratio ?: got.list.firstNotNullOfOrNull { it.ratio }
                 val have = p.items.map { it.id }.toHashSet()
-                val fresh = got.list.filter { it.id.isNotBlank() && it.name.isNotBlank() }.map { SourceSearch.siteTitle(s, it) }.filter { have.add(it.id) }
+                val fresh = got.list.filter { it.id.isNotBlank() && it.name.isNotBlank() }.mapNotNull { v ->
+                    SourceSearch.siteTitle(s, v).takeIf { have.add(it.id) }?.also { if (v.folder) p.folders[it.id] = v.id }
+                }
                 p.items.addAll(fresh)
                 p.page++
                 if (c == HOME || fresh.isEmpty()) p.end = true
                 p.error = null
                 // 首页没列表（不少插件只给分类）：直接进第一个分类
-                if (c == HOME && p.items.isEmpty() && got.classes.isNotEmpty() && cls == HOME && site?.key == s.key) cls = got.classes.first().id
+                if (c == HOME && p.items.isEmpty() && got.classes.isNotEmpty() && cls == HOME && site?.key == s.key && trailS.isEmpty()) cls = got.classes.first().id
             } catch (e: Throwable) {
                 p.error = "这个站点打不开：${e.message?.take(70) ?: e.javaClass.simpleName}"
                 if (c == HOME) p.classes = emptyList()
@@ -148,16 +178,16 @@ fun SitesScreen(mem: FocusMemory) {
     }
     // 分类表在首页的结果里：先拉首页，再拉选中的分类
     LaunchedEffect(head) { if (site != null && head.classes == null) load(head, HOME) }
-    LaunchedEffect(page) { if (site != null && page !== head && page.items.isEmpty() && !page.end) load(page, cls) }
+    LaunchedEffect(page) { if (site != null && page !== head && page.items.isEmpty() && !page.end) load(page, folder ?: cls) }
 
     val grid = rememberLazyGridState()
     var lastKey by rememberSaveable { mutableStateOf("") }
-    LaunchedEffect(site?.key, cls) {
-        val k = "${site?.key}|$cls"
+    LaunchedEffect(site?.key, cls, folder) {
+        val k = "${site?.key}|$cls|$folder"
         if (k != lastKey) { if (lastKey.isNotEmpty()) runCatching { grid.scrollToItem(0) }; lastKey = k }
     }
     val size by rememberUpdatedState(page.items.size)
-    val moreNow by rememberUpdatedState({ load(page, cls) })
+    val moreNow by rememberUpdatedState({ load(page, folder ?: cls) })
     LaunchedEffect(grid) {
         snapshotFlow { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }.collect { last ->
             if (size > 0 && last >= size - 10) moreNow()
@@ -169,24 +199,48 @@ fun SitesScreen(mem: FocusMemory) {
         horizontalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         // ---------------- 左：站点 ----------------
-        Column(Modifier.width(158.dp).fillMaxHeight()) {
-            T(if (list == null) "站点" else "站点 · ${list.size}", 10.sp, Palette.T3, FontWeight.SemiBold, modifier = Modifier.padding(start = 10.dp, bottom = 6.dp))
-            when {
-                list == null -> T(err ?: "正在加载「${Sources.name}」…", 11.sp, Palette.T3, lines = 4, modifier = Modifier.padding(start = 10.dp))
-                else -> LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp), contentPadding = PaddingValues(bottom = Dimens.SafeV)) {
-                    items(list, key = { it.key }) { s ->
-                        SiteItem(
-                            s, s.key == site?.key,
-                            Modifier.remembered(mem, "site:${s.key}", isDefault = s == site),
-                            onFocus = { hovered = s.key },
-                        ) { hovered = null; siteKey = s.key }
-                    }
+        // 从标签栏、右边进来时落在当前选中的站点上，不然落到最上面的「豆瓣找片」，停一下就切过去了
+        val selReq = remember { FocusRequester() }
+        var selShown by remember { mutableStateOf(false) }
+        val sel = Modifier.focusRequester(selReq)
+        @Composable fun Shown() = DisposableEffect(Unit) { selShown = true; onDispose { selShown = false } }
+        Column(Modifier.width(158.dp).fillMaxHeight().focusProperties { enter = { if (selShown) selReq else FocusRequester.Default } }.focusGroup()) {
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp), contentPadding = PaddingValues(bottom = Dimens.SafeV)) {
+                item(key = DOUBAN) {
+                    if (douban) Shown()
+                    SiteItem(
+                        "豆瓣找片", "榜单 · 筛选", douban,
+                        Modifier.remembered(mem, "site:$DOUBAN", isDefault = douban).then(if (douban) sel else Modifier),
+                        onFocus = { hovered = DOUBAN },
+                    ) { hovered = null; siteKey = DOUBAN }
+                }
+                item(key = "\u0000head") {
+                    T(
+                        if (list == null) "片源里的站点" else "片源里的站点 · ${list.size}", 9.sp, Palette.T3, FontWeight.SemiBold,
+                        lines = 2, modifier = Modifier.padding(start = 10.dp, top = 12.dp, bottom = 4.dp),
+                    )
+                }
+                if (list == null) item(key = "\u0000wait") {
+                    T(err ?: "正在加载…", 10.sp, Palette.T3, lines = 4, modifier = Modifier.padding(start = 10.dp))
+                } else items(list, key = { it.key }) { s ->
+                    val on = s.key == site?.key
+                    if (on) Shown()
+                    SiteItem(
+                        SourceSearch.siteLabel(s.name), s.notVideo ?: if (!s.searchable) "只能逛，不能搜" else "", on,
+                        Modifier.remembered(mem, "site:${s.key}", isDefault = on).then(if (on) sel else Modifier),
+                        onFocus = { hovered = s.key },
+                    ) { hovered = null; siteKey = s.key }
                 }
             }
         }
         // ---------------- 右：分类 + 海报 ----------------
         Column(Modifier.weight(1f).fillMaxHeight()) {
-            if (site != null) {
+            if (site == null) FindScreen(mem, embedded = true)
+            else {
+                // 第一排海报按上：系统的方向查找会越过分类这一排直接跳到标签栏，这里自己指过去
+                val clsReq = remember { FocusRequester() }
+                val backReq = remember { FocusRequester() }
+                var posterIdx by remember { mutableStateOf(-1) }
                 val classes = head.classes.orEmpty()
                 LazyRow(
                     Modifier.fillMaxWidth().height(30.dp),
@@ -195,35 +249,56 @@ fun SitesScreen(mem: FocusMemory) {
                     contentPadding = PaddingValues(horizontal = 4.dp),
                 ) {
                     item(key = HOME) {
-                        Chip("首页", cls == HOME, { cls = HOME }, Modifier.remembered(mem, "cls:$HOME"), size = 11.sp, height = 22.dp, idleBg = Color.White.copy(alpha = 0.08f))
+                        Chip("首页", cls == HOME, { cls = HOME }, Modifier.remembered(mem, "cls:$HOME").then(if (cls == HOME) Modifier.focusRequester(clsReq) else Modifier), size = 11.sp, height = 22.dp, idleBg = Color.White.copy(alpha = 0.08f))
                     }
                     items(classes, key = { "c:" + it.id }) { c ->
-                        Chip(c.name, cls == c.id, { cls = c.id }, Modifier.remembered(mem, "cls:${c.id}"), size = 11.sp, height = 22.dp, idleBg = Color.White.copy(alpha = 0.08f))
+                        Chip(c.name, cls == c.id, { cls = c.id }, Modifier.remembered(mem, "cls:${c.id}").then(if (cls == c.id) Modifier.focusRequester(clsReq) else Modifier), size = 11.sp, height = 22.dp, idleBg = Color.White.copy(alpha = 0.08f))
                     }
+                }
+                if (trail.isNotEmpty()) Row(
+                    Modifier.padding(start = 4.dp, top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Chip("‹ 返回上一层", false, { popFolder() }, Modifier.focusRequester(backReq), size = 10.5.sp, height = 22.dp, idleBg = Color.White.copy(alpha = 0.08f))
+                    T(trail.joinToString(" › ") { it.second }, 10.sp, Palette.T2)
                 }
                 val status = when {
                     page.error != null && page.items.isEmpty() -> page.error!!
                     page.loading && page.items.isEmpty() -> "正在打开「${SourceSearch.siteLabel(site.name)}」…"
-                    page.items.isEmpty() && page.end -> if (cls == HOME && classes.isNotEmpty()) "首页没有推荐，选一个分类看看" else "这一栏是空的"
+                    page.items.isEmpty() && page.end -> if (cls == HOME && folder == null && classes.isNotEmpty()) "首页没有推荐，选一个分类看看" else "这一栏是空的"
                     else -> ""
                 }
                 if (status.isNotEmpty()) T(status, 11.sp, if (page.error != null) Palette.Bad else Palette.T3, lines = 3, modifier = Modifier.padding(start = 6.dp, top = 24.dp))
                 else TopAlignScroll(8.dp) {
+                    val ratio = page.ratio ?: (2f / 3f)
+                    val base = Prefs.cols(6)
+                    // 横版海报一排少放几张
+                    val cols = if (ratio >= 1.2f) maxOf(2, (base * 2 + 1) / 3) else base
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(Prefs.cols(6)),
+                        columns = GridCells.Fixed(cols),
                         state = grid,
-                        modifier = Modifier.padding(top = 4.dp).fillMaxHeight(),
+                        modifier = Modifier.padding(top = 4.dp).fillMaxHeight().onPreviewKeyEvent { e ->
+                            if (e.type != KeyEventType.KeyDown || e.key != Key.DirectionUp || posterIdx !in 0 until cols) false
+                            else runCatching { (if (trail.isNotEmpty()) backReq else clsReq).requestFocus() }.isSuccess
+                        },
                         contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 8.dp, bottom = Dimens.SafeV),
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                         verticalArrangement = Arrangement.spacedBy(18.dp),
                     ) {
-                        items(page.items, key = { it.id }) { t ->
+                        itemsIndexed(page.items, key = { _, it -> it.id }) { i, t ->
+                            val dir = page.folders[t.id]
                             PosterCell(
                                 t,
                                 focusModifier = Modifier.remembered(mem, "p:${t.id}"),
-                                onClick = { Catalog.putSource(listOf(t)); nav.openDetail(t.id) },
-                                onMenu = { Catalog.putSource(listOf(t)); nav.posterMenu(t) },
+                                onFocus = { posterIdx = i },
+                                onClick = {
+                                    if (dir != null) trailS = (trail + (dir to t.name.replace('\n', ' '))).joinToString("\n") { "${it.first}\u0001${it.second}" }
+                                    else { Catalog.putSource(listOf(t)); nav.openDetail(t.id) }
+                                },
+                                onMenu = if (dir != null) null else ({ Catalog.putSource(listOf(t)); nav.posterMenu(t) }),
                                 sub = t.oneLiner.substringAfter(" · ", "").ifEmpty { t.genres.firstOrNull().orEmpty() },
+                                badge = if (dir != null) "文件夹" else null,
+                                ratio = ratio,
                             )
                         }
                     }
@@ -234,7 +309,7 @@ fun SitesScreen(mem: FocusMemory) {
 }
 
 @Composable
-private fun SiteItem(s: SiteCfg, on: Boolean, modifier: Modifier, onFocus: () -> Unit, onClick: () -> Unit) {
+private fun SiteItem(label: String, sub: String, on: Boolean, modifier: Modifier, onFocus: () -> Unit, onClick: () -> Unit) {
     Focusable(onClick, modifier.fillMaxWidth(), corner = 8.dp, scale = 1.02f, ring = false, onFocus = onFocus) { f ->
         val fg = when { f -> Palette.Bg; on -> Palette.Douban; else -> Palette.T1 }
         Column(
@@ -243,8 +318,7 @@ private fun SiteItem(s: SiteCfg, on: Boolean, modifier: Modifier, onFocus: () ->
                 .padding(horizontal = 10.dp),
             verticalArrangement = Arrangement.Center,
         ) {
-            T(SourceSearch.siteLabel(s.name), 11.5.sp, fg, if (on || f) FontWeight.SemiBold else FontWeight.Normal)
-            val sub = s.notVideo ?: if (!s.searchable) "只能逛，不能搜" else ""
+            T(label, 11.5.sp, fg, if (on || f) FontWeight.SemiBold else FontWeight.Normal)
             if (sub.isNotEmpty()) T(sub, 8.sp, if (f) Palette.Bg.copy(alpha = 0.6f) else Palette.T3)
         }
     }

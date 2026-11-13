@@ -45,7 +45,7 @@ import dev.personal.tv.ui.components.remembered
 import dev.personal.tv.ui.theme.Dimens
 import dev.personal.tv.ui.theme.Palette
 
-/** 首页 / 找片 / 站点 / 想看 / 直播 几个标签共用的外壳：顶栏 + 内容 */
+/** 首页 / 找片 / 想看 / 直播 几个标签共用的外壳：顶栏 + 内容 */
 @Composable
 fun MainScreen() {
     val nav = LocalNav.current
@@ -60,8 +60,8 @@ fun MainScreen() {
         holder.SaveableStateProvider(nav.tab.name) {
             when (nav.tab) {
                 Tab.HOME -> HomeScreen(mem)
-                Tab.FIND -> FindScreen(mem)
-                Tab.SITES -> SitesScreen(mem)
+                // 找片 = 豆瓣找片 + 片源里各站点（见 SitesScreen）
+                Tab.FIND -> SitesScreen(mem)
                 Tab.WISH -> WishScreen(mem)
                 Tab.LIVE -> LiveScreen(mem)
             }

@@ -92,7 +92,7 @@ fun SettingsScreen() {
                 Toggle(AudioFx.night, onLight = fg == Palette.Bg)
             }
             Section("显示")
-            Row("海报大小 · ${Prefs.posterLabel}", "首页、找片、搜索、站点、想看的海报都跟着变", Modifier.remembered(mem, "poster"), onClick = { Prefs.posterSize = (Prefs.posterSize + 1) % 3 }) { fg ->
+            Row("海报大小 · ${Prefs.posterLabel}", "首页、找片、搜索、想看的海报都跟着变", Modifier.remembered(mem, "poster"), onClick = { Prefs.posterSize = (Prefs.posterSize + 1) % 3 }) { fg ->
                 T(listOf("小", "中", "大").joinToString("  ") { if (it == Prefs.posterLabel) "●$it" else it }, 11.sp, fg)
             }
             Section("片库")

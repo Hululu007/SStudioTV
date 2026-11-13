@@ -94,9 +94,12 @@ private fun kindQuery(k: Kind): Pair<String, String?> = when (k) {
     Kind.DOC -> "tv" to "纪录片"
 }
 
-/** 找片：先选类别和榜单，再加筛选；数据是豆瓣选片接口，翻到底自动加载下一页 */
+/**
+ * 豆瓣找片：先选类别和榜单，再加筛选；数据是豆瓣选片接口，翻到底自动加载下一页。
+ * [embedded]：嵌在「找片」左栏站点列表的右边（第一项「豆瓣找片」），不留外边距、不要右侧信息栏
+ */
 @Composable
-fun FindScreen(mem: FocusMemory) {
+fun FindScreen(mem: FocusMemory, embedded: Boolean = false) {
     var kind by rememberSaveable { mutableIntStateOf(1) }
     var list by rememberSaveable { mutableIntStateOf(0) }
     var genre by rememberSaveable { mutableIntStateOf(0) }
@@ -132,11 +135,11 @@ fun FindScreen(mem: FocusMemory) {
     var lastKey by rememberSaveable { mutableStateOf(filterKey) }
     LaunchedEffect(filterKey) { if (filterKey != lastKey) { lastKey = filterKey; grid.scrollToItem(0) } }
 
-    Box(Modifier.fillMaxSize().drawBehind {
+    Box(Modifier.fillMaxSize().then(if (embedded) Modifier else Modifier.drawBehind {
         drawRect(Brush.radialGradient(listOf(Color(0x3036545E), Color.Transparent), center = androidx.compose.ui.geometry.Offset(size.width * 0.8f, 0f), radius = size.width * 0.6f))
-    }) {
+    })) {
         Column(
-            Modifier.padding(start = Dimens.SafeH, end = Dimens.SafeH, top = 66.dp),
+            if (embedded) Modifier.padding(start = 4.dp) else Modifier.padding(start = Dimens.SafeH, end = Dimens.SafeH, top = 66.dp),
             verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -174,7 +177,7 @@ fun FindScreen(mem: FocusMemory) {
             }
         }
         PosterGridWithInfo(
-            titles, mem, grid, top = 142.dp,
+            titles, mem, grid, top = if (embedded) 72.dp else 142.dp, embedded = embedded,
             emptyText = if (page.loading) "" else page.error ?: "没有符合条件的片子，放宽一下筛选试试",
             onMore = ::more,
         )
@@ -287,7 +290,7 @@ fun WishScreen(mem: FocusMemory) {
 
 /** 6 列海报网格 + 右侧焦点信息栏，找片和想看共用 */
 @Composable
-private fun PosterGridWithInfo(titles: List<Title>, mem: FocusMemory, grid: LazyGridState, top: androidx.compose.ui.unit.Dp, emptyText: String, onMore: (() -> Unit)? = null) {
+private fun PosterGridWithInfo(titles: List<Title>, mem: FocusMemory, grid: LazyGridState, top: androidx.compose.ui.unit.Dp, emptyText: String, onMore: (() -> Unit)? = null, embedded: Boolean = false) {
     val nav = LocalNav.current
     if (onMore != null) {
         val size by rememberUpdatedState(titles.size)
@@ -304,13 +307,13 @@ private fun PosterGridWithInfo(titles: List<Title>, mem: FocusMemory, grid: Lazy
 
     Box(Modifier.fillMaxSize().padding(top = top)) {
         if (titles.isEmpty()) {
-            T(emptyText, 12.sp, Palette.T3, modifier = Modifier.padding(start = Dimens.SafeH, top = 40.dp))
+            T(emptyText, 12.sp, Palette.T3, modifier = Modifier.padding(start = if (embedded) 6.dp else Dimens.SafeH, top = 40.dp))
         } else {
             TopAlignScroll(8.dp) {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(dev.personal.tv.data.Prefs.cols(6)),
                     state = grid,
-                    modifier = Modifier.padding(start = Dimens.SafeH - 8.dp).width(640.dp).fillMaxHeight(),
+                    modifier = (if (embedded) Modifier.fillMaxWidth() else Modifier.padding(start = Dimens.SafeH - 8.dp).width(640.dp)).fillMaxHeight(),
                     contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 8.dp, bottom = Dimens.SafeV),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -327,7 +330,7 @@ private fun PosterGridWithInfo(titles: List<Title>, mem: FocusMemory, grid: Lazy
                 }
             }
         }
-        if (info != null) InfoPanel(info, Modifier.padding(start = 692.dp, end = Dimens.SafeH, top = 8.dp, bottom = Dimens.SafeV))
+        if (info != null && !embedded) InfoPanel(info, Modifier.padding(start = 692.dp, end = Dimens.SafeH, top = 8.dp, bottom = Dimens.SafeV))
     }
 }
 

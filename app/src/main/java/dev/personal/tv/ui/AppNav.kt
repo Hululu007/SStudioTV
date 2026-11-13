@@ -59,7 +59,7 @@ import dev.personal.tv.ui.theme.Palette
 import dev.personal.tv.ui.theme.TvScale
 import kotlinx.coroutines.delay
 
-enum class Tab(val label: String) { HOME("首页"), FIND("找片"), SITES("站点"), WISH("想看"), LIVE("直播") }
+enum class Tab(val label: String) { HOME("首页"), FIND("找片"), WISH("想看"), LIVE("直播") }
 
 sealed class Route(val key: String) {
     data object Main : Route("main")
