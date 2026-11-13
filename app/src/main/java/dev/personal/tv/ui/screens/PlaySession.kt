@@ -14,6 +14,9 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.TransferListener
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -81,6 +84,30 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         private set
     /** 换线时给界面的提示 */
     var notice by mutableStateOf<String?>(null)
+    /** 现在在哪一步：找线路、解析、首次缓冲、在播。加载时给界面算「已等几秒」「几秒后换线」 */
+    enum class Phase { FIND, RESOLVE, BUFFER, PLAY }
+    var phase by mutableStateOf(Phase.FIND)
+        private set
+    /** 这一步开始的时间 */
+    private var phaseAt by mutableLongStateOf(System.currentTimeMillis())
+    /** 每 0.5 秒走一下，让界面上的秒数、速度跟着刷新 */
+    var now by mutableLongStateOf(System.currentTimeMillis())
+        private set
+    /** 下载速度（字节 / 秒），平滑过的 */
+    var rate by mutableLongStateOf(0L)
+        private set
+    private val bytes = java.util.concurrent.atomic.AtomicLong()
+    /** 数播放器从网上拿了多少字节，算下载速度 */
+    private val meter = object : TransferListener {
+        override fun onTransferInitializing(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) {}
+        override fun onTransferStart(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) {}
+        override fun onBytesTransferred(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean, n: Int) { if (isNetwork) bytes.addAndGet(n.toLong()) }
+        override fun onTransferEnd(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) {}
+    }
+    /** 这次是用户在线路面板里点的那一条：播不了就停，不自动换 */
+    private var manual = false
+    private fun enter(p: Phase) { phase = p; phaseAt = System.currentTimeMillis() }
+
     /** 播放器状态（Player.STATE_*） */
     var state by mutableIntStateOf(Player.STATE_IDLE)
         private set
@@ -144,6 +171,9 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             var tick = 0
             while (true) {
                 delay(500)
+                val b = bytes.getAndSet(0) * 2
+                rate = if (rate == 0L) b else (rate + b) / 2
+                now = System.currentTimeMillis()
                 // 停掉（退到后台）以后时长读不到了，留着停之前的
                 if (player.playbackState != Player.STATE_IDLE) {
                     posMs = player.currentPosition
@@ -151,7 +181,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
                 }
                 // 播放中途卡住太久也算这条线路不行
                 if (status == null && !hidden && player.playWhenReady && bufferingSince > 0 && player.playbackState == Player.STATE_BUFFERING &&
-                    System.currentTimeMillis() - bufferingSince > 20_000
+                    System.currentTimeMillis() - bufferingSince > STALL_S * 1000L
                 ) { bufferingSince = 0; failover("卡住超过 20 秒") }
                 if (++tick % 20 == 0 && player.isPlaying) save()
             }
@@ -162,6 +192,8 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     private fun start(ep: Int, startMs: Long, prefer: String?, only: PlayLine? = null, first: PlayLine? = null) {
         job?.cancel()
         this.ep = ep
+        enter(Phase.FIND)
+        manual = only != null
         fail = null
         askContinue = false
         resumeMs = -1
@@ -418,11 +450,12 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     private suspend fun tryLine(c: TvConfig, l: PlayLine, e: Episode, startMs: Long): Boolean {
         line = l
         status = "正在解析 · ${l.siteName} · ${l.flag}"
+        enter(Phase.RESOLVE)
         player.stop()
         val t0 = System.currentTimeMillis()
         var why = "解析不出视频地址"
         val info = try {
-            withTimeoutOrNull(45_000) { Lines.yieldTo { resolve(c, l, e) } }
+            withTimeoutOrNull(RESOLVE_S * 1000L) { Lines.yieldTo { resolve(c, l, e) } }
         } catch (x: Throwable) {
             Log.w(TAG, "resolve ${l.key}", x)
             val root = generateSequence(x) { it.cause }.last()
@@ -438,9 +471,10 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             return false
         }
         status = "缓冲中…"
+        enter(Phase.BUFFER)
         val fmt = withContext(Dispatchers.IO) { format(info) }
         val ua = info.headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value
-        val ds = OkHttpDataSource.Factory(Net.client)
+        val ds = OkHttpDataSource.Factory(Net.client).setTransferListener(meter)
             .setUserAgent(ua ?: "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/120 Safari/537.36")
             .setDefaultRequestProperties(info.headers.filterKeys { !it.equals("User-Agent", true) })
         val item = MediaItem.Builder().setUri(info.url).apply {
@@ -456,7 +490,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         player.setPlaybackSpeed(speed)
         player.prepare()
         player.playWhenReady = !hidden
-        val ok = withTimeoutOrNull(25_000) { r.await() } ?: false
+        val ok = withTimeoutOrNull(READY_S * 1000L) { r.await() } ?: false
         ready = null
         if (!ok) {
             set.failed.putIfAbsent(l.key, "播放失败")
@@ -465,6 +499,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             return false
         }
         status = null
+        enter(Phase.PLAY)
         set.failed.remove(l.key)
         Log.i(TAG, "✓ ${l.key} 第 $ep 集「$epName」 ${System.currentTimeMillis() - t0}ms ${info.url.take(80)}")
         save()
@@ -478,6 +513,45 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         if (!p.parse && !p.jx) return p
         status = "网页解析 · ${l.siteName} · ${l.flag}"
         return Parser.resolve(ctx, c, l.flag, p, withContext(Dispatchers.IO) { api.videoCheck() })?.info
+    }
+
+    /**
+     * 加载时状态下面那行小字：第几条线路、等了几秒、下载速度、已缓冲多少、几秒后自动换线。
+     * 卡了半天不出画面时，看这行能知道是在等插件解析、还是网速太慢。
+     */
+    fun detail(): String? {
+        if (fail != null || status == null) return null
+        val waited = ((now - phaseAt) / 1000).toInt()
+        val parts = mutableListOf<String>()
+        val n = set.lines.size
+        when (phase) {
+            Phase.FIND -> {
+                if (n > 0) parts += "已找到 $n 条线路"
+                if (waited >= 3) parts += "已等 $waited 秒"
+            }
+            Phase.RESOLVE, Phase.BUFFER -> {
+                if (n > 1) parts += "第 ${tried.size.coerceIn(1, n)}/$n 条线路"
+                if (phase == Phase.BUFFER) {
+                    parts += speedText(rate)
+                    val ahead = (player.bufferedPosition - player.currentPosition).coerceAtLeast(0) / 1000
+                    if (ahead > 0) parts += "已缓冲 $ahead 秒"
+                }
+                if (waited >= 3) parts += "已等 $waited 秒"
+                val limit = if (phase == Phase.RESOLVE) RESOLVE_S else READY_S
+                if (waited >= 5 && waited < limit) parts += if (Prefs.autoLine && !manual) "${limit - waited} 秒后换下一条" else "最多再等 ${limit - waited} 秒"
+            }
+            Phase.PLAY -> return null
+        }
+        return parts.joinToString(" · ").ifEmpty { null }
+    }
+
+    /** 播放中途卡住（画面已经出来了）：右上角小字，速度 + 卡了几秒 */
+    fun stallText(): String? {
+        if (phase != Phase.PLAY || status != null || fail != null || !player.playWhenReady || state != Player.STATE_BUFFERING) return null
+        val since = bufferingSince.takeIf { it > 0 } ?: return "缓冲中 · ${speedText(rate)}"
+        val s = ((now - since) / 1000).toInt()
+        if (s < 1) return null
+        return "缓冲中 · ${speedText(rate)} · 已卡 $s 秒" + if (Prefs.autoLine && s >= 5 && s < STALL_S) "，${STALL_S - s} 秒后换线" else ""
     }
 
     /** 地址没扩展名时探一下开头几个字节，HLS/DASH 要告诉播放器 */
@@ -500,5 +574,18 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
                     }
                 }
         }.getOrNull()
+    }
+
+    companion object {
+        /** 解析最多等几秒、换好地址后等出画面几秒、播放中卡住几秒算这条线路不行 */
+        const val RESOLVE_S = 45
+        const val READY_S = 25
+        const val STALL_S = 20
+
+        fun speedText(bps: Long) = when {
+            bps <= 0 -> "没收到数据"
+            bps < 1024 * 1024 -> "${bps / 1024} KB/s"
+            else -> "%.1f MB/s".format(bps / 1048576.0)
+        }
     }
 }

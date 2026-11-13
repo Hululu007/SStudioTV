@@ -170,9 +170,14 @@ fun PhonePlayer(r: Route.Player) {
         ps.status?.let { st ->
             if (ps.fail == null) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                 Tx(st, 15.sp, Palette.T1, FontWeight.SemiBold)
-                val n = ps.set.lines.size
-                if (n > 0) Tx("已找到 $n 条线路 · 点「线路」可以手动选", 12.sp, Palette.T3, modifier = Modifier.padding(top = 6.dp))
+                ps.detail()?.let { Tx(it, 12.5.sp, Palette.T2, modifier = Modifier.padding(top = 6.dp)) }
+                if (ps.set.lines.isNotEmpty()) Tx("点「线路」可以手动选", 11.5.sp, Palette.T3, modifier = Modifier.padding(top = 4.dp))
             }
+        }
+        // 画面出来以后中途卡住：右上角小字
+        ps.stallText()?.let {
+            Tx(it, 12.sp, Palette.T1, modifier = Modifier.align(Alignment.TopEnd).windowInsetsPadding(WindowInsets.displayCutout).padding(top = 12.dp, end = 16.dp)
+                .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(6.dp)).padding(horizontal = 10.dp, vertical = 5.dp))
         }
         ps.fail?.let {
             Dialog(Modifier.align(Alignment.Center), "播放不了", it) {

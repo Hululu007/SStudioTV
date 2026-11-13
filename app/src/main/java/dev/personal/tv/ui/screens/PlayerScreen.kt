@@ -107,7 +107,8 @@ private val SPEEDS = listOf(1f, 1.25f, 1.5f, 2f, 0.75f)
 
 /**
  * 播放页：Media3 真播放，线路来自多源合并（[Lines]）。
- * - 无控制栏时：OK / 上下 呼出控制栏，左 后退 10 秒，右 呼出线路面板；
+ * - 无控制栏时：OK 暂停 / 继续（同时露出控制栏，还在加载时只露控制栏），上下 呼出控制栏，左 后退 10 秒，右 快进 30 秒；
+ *   还没出画面（解析中、播放失败）时右键打开线路面板。有画面时换线路在控制栏的「线路」里
  * - 控制栏 5 秒无操作自动收起；返回键逐层收起，最后退出播放。
  */
 @OptIn(UnstableApi::class)
@@ -126,6 +127,8 @@ fun PlayerScreen(r: Route.Player) {
     var lastInput by remember { mutableLongStateOf(0L) }
     var focusBar by remember { mutableStateOf(false) }
     val idle = !controls && !sheet && !strip
+    // 续播时 posMs 一开始就是上次的位置、playing 是 playWhenReady，都不能说明有画面；线路真起播了才算
+    val hasPicture = ps.phase == PlaySession.Phase.PLAY
     val pos = (ps.posMs / 1000).toInt()
     val dur = (ps.durMs / 1000).toInt()
 
@@ -198,9 +201,16 @@ fun PlayerScreen(r: Route.Player) {
         ps.status?.let { st ->
             if (ps.fail == null) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                 T(st, 13.sp, Palette.T1, FontWeight.SemiBold)
-                val n = ps.set.lines.size
-                if (n > 0) T("已找到 $n 条线路 · 按右键可以手动选", 10.sp, Palette.T3, modifier = Modifier.padding(top = 6.dp))
+                ps.detail()?.let { T(it, 10.5.sp, Palette.T2, modifier = Modifier.padding(top = 6.dp)) }
+                if (ps.set.lines.isNotEmpty()) {
+                    T(if (hasPicture) "控制栏的「线路」里可以手动选" else "按右键可以手动选线路", 9.5.sp, Palette.T3, modifier = Modifier.padding(top = 4.dp))
+                }
             }
+        }
+        // 已经出画面以后中途卡住：右上角小字，看得出是不是还在下数据
+        ps.stallText()?.let {
+            T(it, 10.sp, Palette.T1, modifier = Modifier.align(Alignment.TopEnd).padding(top = Dimens.SafeV, end = Dimens.SafeH)
+                .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(6.dp)).padding(horizontal = 10.dp, vertical = 5.dp))
         }
         ps.fail?.let {
             Column(
@@ -226,6 +236,7 @@ fun PlayerScreen(r: Route.Player) {
 
         // 只在空闲时接收按键的隐形焦点
         var okDown by remember { mutableStateOf(false) }
+        // 有画面（在播、或者已经播过一段）：OK 暂停 / 继续，左右快退快进；没画面时右键直接去选线路
         Box(
             Modifier.size(1.dp).focusRequester(catcher)
                 .focusProperties { canFocus = idle }
@@ -239,13 +250,20 @@ fun PlayerScreen(r: Route.Player) {
                                 when {
                                     ps.fail != null -> ps.retry()
                                     ps.askContinue -> ps.keepWatching()
+                                    // 有画面了：OK 一下就暂停 / 继续，同时露出控制栏（焦点在播放键，再按还是暂停 / 继续）
+                                    hasPicture || ps.status == null && ps.line != null -> { ps.togglePlay(); controls = true }
                                     else -> controls = true
                                 }
                             }
                             true
                         }
                         Key.DirectionUp, Key.DirectionDown -> { if (down) controls = true; true }
-                        Key.DirectionRight -> { if (down) sheet = true; true }
+                        Key.DirectionRight -> {
+                            if (down) {
+                                if (hasPicture && ps.fail == null) { ps.seekBy(30); focusBar = true; controls = true } else sheet = true
+                            }
+                            true
+                        }
                         Key.DirectionLeft -> {
                             if (down) { ps.seekBy(-10); focusBar = true; controls = true }
                             true
@@ -284,6 +302,7 @@ fun PlayerScreen(r: Route.Player) {
                     ControlButtons(
                         t, ps, playReq,
                         onEpisodes = { strip = true },
+                        onLines = { controls = false; sheet = true },
                         onNext = { ps.playNext() },
                     )
                 }
@@ -343,7 +362,7 @@ private fun SeekBar(pos: Int, dur: Int, req: FocusRequester, seek: (Int) -> Unit
 @Composable
 private fun ControlButtons(
     t: Title, ps: PlaySession, playReq: FocusRequester,
-    onEpisodes: () -> Unit, onNext: () -> Unit,
+    onEpisodes: () -> Unit, onLines: () -> Unit, onNext: () -> Unit,
 ) {
     val nav = LocalNav.current
     Row(Modifier.fillMaxWidth().padding(top = 11.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -354,6 +373,7 @@ private fun ControlButtons(
             }
         }
         if (t.isEpisodic && ps.episodeCount > 1) CtlChip("选集") { onEpisodes() }
+        if (ps.set.lines.isNotEmpty()) CtlChip("线路 ${ps.set.lines.size}") { onLines() }
         CtlChip("倍速 ${"%.2f".format(ps.speed).trimEnd('0').trimEnd('.')}×", lit = ps.speed != 1f) {
             ps.setRate(SPEEDS[(SPEEDS.indexOf(ps.speed) + 1) % SPEEDS.size])
         }
