@@ -107,7 +107,7 @@ private val SPEEDS = listOf(1f, 1.25f, 1.5f, 2f, 0.75f)
 
 /**
  * 播放页：Media3 真播放，线路来自多源合并（[Lines]）。
- * - 无控制栏时：OK 暂停 / 继续（同时露出控制栏，还在加载时只露控制栏），上下 呼出控制栏，左 后退 10 秒，右 快进 30 秒；
+ * - 无控制栏时：OK 暂停 / 继续（同时露出控制栏，还在加载时只露控制栏），上下 呼出控制栏，左 后退 10 秒，右 快进 10 秒（单步都是 10 秒）；
  *   还没出画面（解析中、播放失败）时右键打开线路面板。有画面时换线路在控制栏的「线路」里
  * - 控制栏 5 秒无操作自动收起；返回键逐层收起，最后退出播放。
  */
@@ -172,7 +172,7 @@ fun PlayerScreen(r: Route.Player) {
                 Key.MediaPlayPause -> { if (up) ps.togglePlay(); true }
                 Key.MediaPlay -> { if (up && !ps.playing) ps.togglePlay(); true }
                 Key.MediaPause -> { if (up && ps.playing) ps.togglePlay(); true }
-                Key.MediaFastForward -> { if (down) ps.seekBy(30); true }
+                Key.MediaFastForward -> { if (down) ps.seekBy(10); true }
                 Key.MediaRewind -> { if (down) ps.seekBy(-10); true }
                 Key.MediaNext -> { if (up && t.isEpisodic) ps.playNext(); true }
                 else -> false
@@ -207,8 +207,8 @@ fun PlayerScreen(r: Route.Player) {
                 }
             }
         }
-        // 已经出画面以后中途卡住：右上角小字，看得出是不是还在下数据
-        ps.stallText()?.let {
+        // 出画面以后右上角小字：暂停时看缓冲了多少、几点了；中途卡住时看是不是还在下数据
+        ps.cornerText()?.let {
             T(it, 10.sp, Palette.T1, modifier = Modifier.align(Alignment.TopEnd).padding(top = Dimens.SafeV, end = Dimens.SafeH)
                 .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(6.dp)).padding(horizontal = 10.dp, vertical = 5.dp))
         }
@@ -260,7 +260,7 @@ fun PlayerScreen(r: Route.Player) {
                         Key.DirectionUp, Key.DirectionDown -> { if (down) controls = true; true }
                         Key.DirectionRight -> {
                             if (down) {
-                                if (hasPicture && ps.fail == null) { ps.seekBy(30); focusBar = true; controls = true } else sheet = true
+                                if (hasPicture && ps.fail == null) { ps.seekBy(10); focusBar = true; controls = true } else sheet = true
                             }
                             true
                         }
@@ -342,7 +342,7 @@ private fun SeekBar(pos: Int, dur: Int, req: FocusRequester, seek: (Int) -> Unit
                 if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
                 when (e.key) {
                     Key.DirectionLeft -> { seek(-10); true }
-                    Key.DirectionRight -> { seek(30); true }
+                    Key.DirectionRight -> { seek(10); true }
                     else -> false
                 }
             }

@@ -545,9 +545,22 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         return parts.joinToString(" · ").ifEmpty { null }
     }
 
-    /** 播放中途卡住（画面已经出来了）：右上角小字，速度 + 卡了几秒 */
-    fun stallText(): String? {
-        if (phase != Phase.PLAY || status != null || fail != null || !player.playWhenReady || state != Player.STATE_BUFFERING) return null
+    /**
+     * 画面出来以后右上角的小字：
+     * 暂停时 = 往后缓冲了多少 · 下载速度（还在下的话）· 现在几点；
+     * 播放中卡住 = 速度 + 卡了几秒。
+     */
+    fun cornerText(): String? {
+        if (phase != Phase.PLAY || status != null || fail != null) return null
+        if (!playing) {
+            val ahead = ((player.bufferedPosition - player.currentPosition).coerceAtLeast(0) / 1000).toInt()
+            val parts = mutableListOf<String>()
+            parts += if (ahead > 0) "已缓冲 ${aheadText(ahead)}" else "还没缓冲"
+            if (player.isLoading) parts += speedText(rate)
+            parts += clock.format(java.util.Date(now))
+            return parts.joinToString(" · ")
+        }
+        if (state != Player.STATE_BUFFERING) return null
         val since = bufferingSince.takeIf { it > 0 } ?: return "缓冲中 · ${speedText(rate)}"
         val s = ((now - since) / 1000).toInt()
         if (s < 1) return null
@@ -587,5 +600,9 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             bps < 1024 * 1024 -> "${bps / 1024} KB/s"
             else -> "%.1f MB/s".format(bps / 1048576.0)
         }
+
+        fun aheadText(s: Int) = if (s < 60) "$s 秒" else "${s / 60} 分 %02d 秒".format(s % 60)
+
+        private val clock = java.text.SimpleDateFormat("HH:mm", java.util.Locale.CHINA)
     }
 }

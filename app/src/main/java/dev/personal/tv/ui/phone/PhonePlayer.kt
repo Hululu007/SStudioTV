@@ -174,8 +174,8 @@ fun PhonePlayer(r: Route.Player) {
                 if (ps.set.lines.isNotEmpty()) Tx("点「线路」可以手动选", 11.5.sp, Palette.T3, modifier = Modifier.padding(top = 4.dp))
             }
         }
-        // 画面出来以后中途卡住：右上角小字
-        ps.stallText()?.let {
+        // 画面出来以后右上角小字：暂停时缓冲进度和时间，卡住时速度
+        ps.cornerText()?.let {
             Tx(it, 12.sp, Palette.T1, modifier = Modifier.align(Alignment.TopEnd).windowInsetsPadding(WindowInsets.displayCutout).padding(top = 12.dp, end = 16.dp)
                 .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(6.dp)).padding(horizontal = 10.dp, vertical = 5.dp))
         }
