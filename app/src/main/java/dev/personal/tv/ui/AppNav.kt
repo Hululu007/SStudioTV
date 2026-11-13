@@ -151,7 +151,7 @@ class Navigator {
                 MenuItem("找类似") { openDetail(t.id, similar = true) },
                 MenuItem(if (wished) "移出想看" else "加入想看") {
                     Store.toggleWish(t.id)
-                    toast(if (wished) "已移出想看" else "已加入想看 · 只存在这台电视上")
+                    toast(if (wished) "已移出想看" else "已加入想看 · 只存在本机")
                 },
             ) + extra + MenuItem("不感兴趣") {
                 Store.hide(t.id)

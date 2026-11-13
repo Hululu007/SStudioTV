@@ -7,7 +7,9 @@ import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import dev.personal.tv.source.Lab
@@ -15,6 +17,9 @@ import dev.personal.tv.source.scan
 import dev.personal.tv.source.dump
 import dev.personal.tv.spider.SpiderClient
 import dev.personal.tv.ui.AppNav
+import dev.personal.tv.ui.phone.PhoneApp
+import dev.personal.tv.ui.phone.PhoneTheme
+import dev.personal.tv.ui.phone.UiMode
 import dev.personal.tv.ui.theme.AppTheme
 import kotlinx.coroutines.launch
 
@@ -25,10 +30,19 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // 插件进程（含本地代理 9978）先拉起来
         SpiderClient.bind(this)
+        // 电视用遥控器界面（强制横屏、按 960×540 排）；手机、平板用触屏界面（正常密度，浏览时竖屏，播放时横屏）
+        val phone = UiMode.phone(this)
+        if (!phone) requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        else {
+            requestedOrientation = UiMode.browseOrientation(this)
+            enableEdgeToEdge(
+                statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+                navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            )
+        }
         setContent {
-            AppTheme {
-                AppNav()
-            }
+            if (phone) PhoneTheme { PhoneApp() }
+            else AppTheme { AppNav() }
         }
         // 只在 debug 包里：adb 广播驱动源调试，批量试站点
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {

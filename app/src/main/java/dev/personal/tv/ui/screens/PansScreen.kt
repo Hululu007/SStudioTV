@@ -320,7 +320,7 @@ private fun ColumnScope.Panel(title: String, url: String?, sub: String, foot: St
 
 /** 插件给的二维码：大多是链接（自己画），UC TV Token 直接给 data:image/png;base64 图 */
 @Composable
-private fun QrImage(s: String, modifier: Modifier) {
+internal fun QrImage(s: String, modifier: Modifier) {
     if (!s.startsWith("data:image")) { Qr(s, modifier); return }
     val bmp = remember(s) {
         runCatching {

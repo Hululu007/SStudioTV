@@ -526,10 +526,10 @@ private fun EpHeader(enter: FocusRequester?, content: @Composable androidx.compo
 }
 
 /** 列表里的一段 [from, to)，按钮上显示 [label] */
-private class Span(val from: Int, val to: Int, val label: String)
+internal class Span(val from: Int, val to: Int, val label: String)
 
 /** 超过 1.5 段才分段；最后一段太短的并进前一段 */
-private fun spans(n: Int, size: Int, label: (Int, Int) -> String): List<Span> {
+internal fun spans(n: Int, size: Int, label: (Int, Int) -> String): List<Span> {
     if (n <= size * 3 / 2) return emptyList()
     val starts = (0 until n step size).toMutableList()
     if (n - starts.last() < size / 3) starts.removeAt(starts.lastIndex)
@@ -537,7 +537,7 @@ private fun spans(n: Int, size: Int, label: (Int, Int) -> String): List<Span> {
 }
 
 /** 分段按钮上的名字：带日期的用日期（「10.01」），第 N 期用「第N期」，认不出的 null（改用序号） */
-private fun spanLabel(name: String, title: String): String? {
+internal fun spanLabel(name: String, title: String): String? {
     val id = Eps.parse(name, title)
     return when {
         id.date != null -> id.date.takeLast(4).let { "${it.take(2)}.${it.takeLast(2)}" }
@@ -570,7 +570,7 @@ private fun SpanChips(spans: List<Span>, state: androidx.compose.foundation.lazy
  * 能换的几套名字。综艺：按名字分期的线路（按序号的名字用不上），加上现在这条；
  * 电视剧：一般不给换，除非现在显示的是带副标题的名字、或者手动换过（换到按序号的那套之后还要能换回来）
  */
-private fun versionChoices(t: Title, line: PlayLine?, numericLine: Boolean, versions: List<PlayLine>): List<PlayLine> {
+internal fun versionChoices(t: Title, line: PlayLine?, numericLine: Boolean, versions: List<PlayLine>): List<PlayLine> {
     if (line == null || versions.size < 2) return emptyList()
     val vs = when {
         t.isVariety -> versions.filter { v -> v.key == line.key || !Eps.numeric(v.episodes, t.name, true) }
@@ -635,7 +635,7 @@ private fun rememberJump(state: androidx.compose.foundation.lazy.LazyListState):
  * 先看上次那个位置上是不是正好这个名字（同名的加更版不能都认成第一个），再按名字找；
  * 按位置凑只在同一条线路、而且记录的就是位置时用。
  */
-private fun namedWatched(t: Title, p: Progress?, line: PlayLine): Int? {
+internal fun namedWatched(t: Title, p: Progress?, line: PlayLine): Int? {
     val pr = p ?: return null
     val eps = line.episodes
     val sameLine = pr.line == line.key && pr.isNamed(t.name)
@@ -645,7 +645,7 @@ private fun namedWatched(t: Title, p: Progress?, line: PlayLine): Int? {
 }
 
 /** 有没有选集行：豆瓣说不止一集，或者线路里不止一集（豆瓣没写集数的综艺） */
-private fun hasEpisodes(t: Title, ref: PlayLine?) =
+internal fun hasEpisodes(t: Title, ref: PlayLine?) =
     t.isEpisodic && (maxOf(t.totalEps, t.airedEps) > 1 || (ref?.episodes?.size ?: 0) > 1)
 
 @Composable

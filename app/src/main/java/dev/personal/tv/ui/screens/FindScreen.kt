@@ -32,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,23 +71,23 @@ import dev.personal.tv.ui.components.remembered
 import dev.personal.tv.ui.theme.Dimens
 import dev.personal.tv.ui.theme.Palette
 
-private val KINDS = listOf(Kind.MOVIE, Kind.SERIES, Kind.VARIETY, Kind.ANIME, Kind.DOC)
+internal val KINDS = listOf(Kind.MOVIE, Kind.SERIES, Kind.VARIETY, Kind.ANIME, Kind.DOC)
 /** 榜单对应豆瓣选片接口的排序：近期热度 / 高分优先 / 首播时间 / 综合 */
-private val LISTS = listOf("近期热门" to "U", "高分" to "S", "新上线" to "R", "综合" to "T")
+internal val LISTS = listOf("近期热门" to "U", "高分" to "S", "新上线" to "R", "综合" to "T")
 // 都是豆瓣选片接口认的标签；改成下拉列表后不怕选项多
-private val GENRES = listOf(
+internal val GENRES = listOf(
     "全部类型", "剧情", "喜剧", "爱情", "悬疑", "犯罪", "动作", "科幻", "奇幻", "惊悚",
     "恐怖", "家庭", "古装", "武侠", "历史", "战争", "冒险", "传记", "动画",
 )
-private val REGIONS = listOf(
+internal val REGIONS = listOf(
     "全部地区", "华语", "欧美", "中国大陆", "中国香港", "中国台湾", "美国", "英国",
     "日本", "韩国", "泰国", "法国", "德国", "西班牙", "印度",
 )
-private val YEARS = listOf("全部年代", "2026", "2025", "2024", "2023", "2020年代", "2010年代", "2000年代", "90年代", "80年代", "70年代")
-private val SCORES = listOf("不限分数" to 0f, "7.5 分以上" to 7.5f, "8 分以上" to 8f, "9 分以上" to 9f)
+internal val YEARS = listOf("全部年代", "2026", "2025", "2024", "2023", "2020年代", "2010年代", "2000年代", "90年代", "80年代", "70年代")
+internal val SCORES = listOf("不限分数" to 0f, "7.5 分以上" to 7.5f, "8 分以上" to 8f, "9 分以上" to 9f)
 
 /** 类别 → 豆瓣大类和固定标签 */
-private fun kindQuery(k: Kind): Pair<String, String?> = when (k) {
+internal fun kindQuery(k: Kind): Pair<String, String?> = when (k) {
     Kind.MOVIE -> "movie" to "电影"
     Kind.SERIES -> "tv" to "电视剧"
     Kind.VARIETY -> "tv" to "综艺"
@@ -107,27 +108,12 @@ fun FindScreen(mem: FocusMemory, embedded: Boolean = false) {
     var year by rememberSaveable { mutableIntStateOf(0) }
     var score by rememberSaveable { mutableIntStateOf(0) }
 
-    val filterKey = listOf(kind, list, genre, region, year, score).joinToString()
+    val filter = FindFilter(kind, list, genre, region, year, score)
+    val filterKey = filter.key
     // 结果按筛选条件存在单例里：切走再回来不用重新拉
     val page = remember(filterKey) { FindPages.get(filterKey) }
-    val (type, kindTag) = kindQuery(KINDS[kind])
-    val tags = listOfNotNull(kindTag, GENRES[genre].takeIf { genre > 0 }, REGIONS[region].takeIf { region > 0 }, YEARS[year].takeIf { year > 0 })
     val scope = rememberCoroutineScope()
-    fun more() {
-        if (page.loading || page.end) return
-        page.loading = true
-        scope.launch {
-            try {
-                val got = Catalog.browse(type, tags, LISTS[list].second, page.ids.size, 60, SCORES[score].second)
-                val fresh = got.map { it.id }.filter { it !in page.ids }
-                page.ids.addAll(fresh)
-                if (got.size < 60 || fresh.isEmpty()) page.end = true
-                page.error = null
-            } catch (e: Throwable) {
-                page.error = "豆瓣连不上：${e.message}"
-            } finally { page.loading = false }
-        }
-    }
+    fun more() = filter.more(page, scope)
     LaunchedEffect(filterKey) { if (page.ids.isEmpty()) more() }
     val titles = page.ids.mapNotNull { Catalog.get(it) }.filter { it.id !in Store.hidden }
 
@@ -184,15 +170,39 @@ fun FindScreen(mem: FocusMemory, embedded: Boolean = false) {
     }
 }
 
+/** 一组豆瓣找片的筛选条件（都是上面几张表里的下标）。电视和手机的找片共用，结果也共用一份缓存 */
+internal data class FindFilter(val kind: Int, val list: Int, val genre: Int, val region: Int, val year: Int, val score: Int) {
+    val key get() = listOf(kind, list, genre, region, year, score).joinToString()
+
+    /** 拉下一页到 [page]（60 部一页） */
+    fun more(page: FindPage, scope: CoroutineScope) {
+        if (page.loading || page.end) return
+        val (type, kindTag) = kindQuery(KINDS[kind])
+        val tags = listOfNotNull(kindTag, GENRES[genre].takeIf { genre > 0 }, REGIONS[region].takeIf { region > 0 }, YEARS[year].takeIf { year > 0 })
+        page.loading = true
+        scope.launch {
+            try {
+                val got = Catalog.browse(type, tags, LISTS[list].second, page.ids.size, 60, SCORES[score].second)
+                val fresh = got.map { it.id }.filter { it !in page.ids }
+                page.ids.addAll(fresh)
+                if (got.size < 60 || fresh.isEmpty()) page.end = true
+                page.error = null
+            } catch (e: Throwable) {
+                page.error = "豆瓣连不上：${e.message}"
+            } finally { page.loading = false }
+        }
+    }
+}
+
 /** 找片每组筛选条件的结果 */
-private class FindPage {
+internal class FindPage {
     val ids = mutableStateListOf<String>()
     var loading by mutableStateOf(false)
     var end by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
 }
 
-private object FindPages {
+internal object FindPages {
     private val pages = LinkedHashMap<String, FindPage>()
     fun get(key: String): FindPage = pages.getOrPut(key) {
         if (pages.size > 20) pages.remove(pages.keys.first())

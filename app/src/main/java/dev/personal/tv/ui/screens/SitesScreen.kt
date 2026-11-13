@@ -68,6 +68,7 @@ import dev.personal.tv.ui.components.TopAlignScroll
 import dev.personal.tv.ui.components.remembered
 import dev.personal.tv.ui.theme.Dimens
 import dev.personal.tv.ui.theme.Palette
+import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -76,12 +77,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** 首页这一栏的分类 id */
-private const val HOME = "\u0000home"
+internal const val HOME = "\u0000home"
 /** 左栏第一项「豆瓣找片」 */
 private const val DOUBAN = "\u0000douban"
 
 /** 一个站点一个分类的列表，存在单例里：切走再回来不重拉 */
-private class SitePage {
+internal class SitePage {
     val items = mutableStateListOf<Title>()
     var classes by mutableStateOf<List<VodClass>?>(null)
     var page = 0
@@ -94,7 +95,7 @@ private class SitePage {
     val folders = HashMap<String, String>()
 }
 
-private object SitePages {
+internal object SitePages {
     private val pages = LinkedHashMap<String, SitePage>()
     fun get(key: String): SitePage = pages.getOrPut(key) {
         if (pages.size > 40) pages.remove(pages.keys.first())
@@ -102,8 +103,44 @@ private object SitePages {
     }
 }
 
+/**
+ * 拉站点 [s] 的 [c] 这一栏（[HOME] 是首页，文件夹也当一栏）下一页到这一页里。首页只有一页，分类表也从首页拿。
+ * [onEmptyHome]：首页没有列表、只给了分类，参数是第一个分类的 id。电视和手机的站点浏览共用。
+ */
+internal fun SitePage.load(ctx: Context, scope: CoroutineScope, s: SiteCfg, c: String, onEmptyHome: (String) -> Unit = {}) {
+    val p = this
+    if (p.loading || p.end) return
+    p.loading = true
+    scope.launch {
+        try {
+            val cfg = Sources.config()
+            // 插件的阻塞调用取消不了：超时就不等了
+            val job = CoroutineScope(Dispatchers.IO).async {
+                val api = Sites.get(ctx.applicationContext, cfg, s)
+                if (c == HOME) api.home() else api.category(c, p.page + 1)
+            }
+            val got = withTimeoutOrNull(25_000) { job.await() } ?: error("站点 25 秒没回应")
+            if (c == HOME) p.classes = got.classes
+            if (p.ratio == null) p.ratio = got.ratio ?: got.list.firstNotNullOfOrNull { it.ratio }
+            val have = p.items.map { it.id }.toHashSet()
+            val fresh = got.list.filter { it.id.isNotBlank() && it.name.isNotBlank() }.mapNotNull { v ->
+                SourceSearch.siteTitle(s, v).takeIf { have.add(it.id) }?.also { if (v.folder) p.folders[it.id] = v.id }
+            }
+            p.items.addAll(fresh)
+            p.page++
+            if (c == HOME || fresh.isEmpty()) p.end = true
+            p.error = null
+            if (c == HOME && p.items.isEmpty() && got.classes.isNotEmpty()) onEmptyHome(got.classes.first().id)
+        } catch (e: Throwable) {
+            p.error = "这个站点打不开：${e.message?.take(70) ?: e.javaClass.simpleName}"
+            if (c == HOME) p.classes = emptyList()
+            p.end = true
+        } finally { p.loading = false }
+    }
+}
+
 /** 站点浏览里列出来的站点：插件、CMS 能用的，设置里「不用」的和配置页、推送这类工具站不列 */
-private fun browsable(s: SiteCfg) = s.kind.supported && s.key !in Prefs.blocked && s.notVideo != "工具"
+internal fun browsable(s: SiteCfg) = s.kind.supported && s.key !in Prefs.blocked && s.notVideo != "工具"
 
 /**
  * 找片：左栏第一项是「豆瓣找片」（[FindScreen]，按豆瓣榜单和筛选找），下面是当前片源的各个站点——
@@ -143,38 +180,10 @@ fun SitesScreen(mem: FocusMemory) {
     val head = remember(cfgUrl, site?.key) { SitePages.get("$cfgUrl|${site?.key}|$HOME") }
     val scope = rememberCoroutineScope()
 
-    /** 拉 [c] 这一栏的下一页到 [p]。首页只有一页，分类表也从首页拿 */
+    /** 拉 [c] 这一栏的下一页到 [p]。首页没列表（不少插件只给分类）：直接进第一个分类 */
     fun load(p: SitePage, c: String) {
         val s = site ?: return
-        if (p.loading || p.end) return
-        p.loading = true
-        scope.launch {
-            try {
-                val cfg = Sources.config()
-                // 插件的阻塞调用取消不了：超时就不等了
-                val job = CoroutineScope(Dispatchers.IO).async {
-                    val api = Sites.get(ctx.applicationContext, cfg, s)
-                    if (c == HOME) api.home() else api.category(c, p.page + 1)
-                }
-                val got = withTimeoutOrNull(25_000) { job.await() } ?: error("站点 25 秒没回应")
-                if (c == HOME) p.classes = got.classes
-                if (p.ratio == null) p.ratio = got.ratio ?: got.list.firstNotNullOfOrNull { it.ratio }
-                val have = p.items.map { it.id }.toHashSet()
-                val fresh = got.list.filter { it.id.isNotBlank() && it.name.isNotBlank() }.mapNotNull { v ->
-                    SourceSearch.siteTitle(s, v).takeIf { have.add(it.id) }?.also { if (v.folder) p.folders[it.id] = v.id }
-                }
-                p.items.addAll(fresh)
-                p.page++
-                if (c == HOME || fresh.isEmpty()) p.end = true
-                p.error = null
-                // 首页没列表（不少插件只给分类）：直接进第一个分类
-                if (c == HOME && p.items.isEmpty() && got.classes.isNotEmpty() && cls == HOME && site?.key == s.key && trailS.isEmpty()) cls = got.classes.first().id
-            } catch (e: Throwable) {
-                p.error = "这个站点打不开：${e.message?.take(70) ?: e.javaClass.simpleName}"
-                if (c == HOME) p.classes = emptyList()
-                p.end = true
-            } finally { p.loading = false }
-        }
+        p.load(ctx, scope, s, c) { first -> if (cls == HOME && site?.key == s.key && trailS.isEmpty()) cls = first }
     }
     // 分类表在首页的结果里：先拉首页，再拉选中的分类
     LaunchedEffect(head) { if (site != null && head.classes == null) load(head, HOME) }

@@ -15,8 +15,8 @@ android {
         applicationId = "com.sstudio.piandan"
         minSdk = 23
         targetSdk = 35
-        versionCode = 20
-        versionName = "0.8.3"
+        versionCode = 21
+        versionName = "0.9.0"
         resValue("string", "app_name", "SStudioTV")
     }
 
@@ -71,6 +71,7 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.animation)
     implementation(libs.compose.icons)
+    implementation(libs.compose.material3) // 手机界面
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.tv.material)
     debugImplementation(libs.compose.ui.tooling)

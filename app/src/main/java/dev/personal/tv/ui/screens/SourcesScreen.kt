@@ -265,7 +265,7 @@ fun SourcesScreen() {
     LaunchedEffect(Unit) { if (mem.lastKey == null) { delay(80); runCatching { first.requestFocus() } } }
 }
 
-private fun summary(c: TvConfig): String {
+internal fun summary(c: TvConfig): String {
     val usable = c.sites.count { it.kind.supported && it.searchable && it.notVideo == null }
     return buildString {
         append("${c.sites.size} 个站点（$usable 个影视站能搜）")

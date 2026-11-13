@@ -22,6 +22,7 @@ data class ChannelGroup(val name: String, val channels: List<Channel>)
 object Live {
     private const val TAG = "Live"
     private lateinit var prefs: android.content.SharedPreferences
+    private lateinit var app: Context
 
     /** 当前片源的直播源（可能有好几个），选的是哪个 */
     var sources by mutableStateOf<List<LiveCfg>>(emptyList())
@@ -37,7 +38,35 @@ object Live {
     private var loadedFor: String? = null
 
     fun init(ctx: Context) {
+        app = ctx.applicationContext
         prefs = ctx.getSharedPreferences("live", Context.MODE_PRIVATE)
+    }
+
+    private fun local(url: String) = runCatching { java.net.URI(url).host }.getOrNull()
+        ?.let { it == "127.0.0.1" || it.equals("localhost", true) } == true
+
+    /**
+     * 直播源是 127.0.0.1:xxxx 的，是插件 jar 加载后自己起的本地服务；冷启动时 jar 还没加载，连不上。
+     * 先唤醒「设置中心」那个插件站点，还不行再唤醒几个别的插件站点，每次唤醒后等它起服务。
+     */
+    private suspend fun fetchLocal(url: String, h: Map<String, String>): String {
+        val first = runCatching { Net.get(url, h, 8) }
+        first.getOrNull()?.let { return it }
+        if (!::app.isInitialized) throw first.exceptionOrNull()!!
+        val config = Sources.config()
+        val jars = config.sites.filter { it.kind == SiteKind.JAR }
+            .sortedByDescending { it.api.endsWith("Config") || "设置" in it.name || "配置" in it.name }
+        var last = first.exceptionOrNull()!!
+        for (batch in listOf(jars.take(1), jars.drop(1).take(6))) {
+            if (batch.isEmpty()) continue
+            Log.i(TAG, "本地直播源连不上，唤醒插件 ${batch.joinToString { it.name }}")
+            batch.forEach { s -> runCatching { (Sites.get(app, config, s) as? JarSite)?.wake() } }
+            repeat(4) {
+                kotlinx.coroutines.delay(800)
+                runCatching { Net.get(url, h, 8) }.onSuccess { return it }.onFailure { last = it }
+            }
+        }
+        throw last
     }
 
     /** 上次看的频道名，下次直接从它开始 */
@@ -62,7 +91,7 @@ object Live {
         try {
             val text = withContext(Dispatchers.IO) {
                 val h = src.header + (src.ua?.let { mapOf("User-Agent" to it) } ?: emptyMap())
-                Net.get(src.url, h, 20)
+                if (local(src.url)) fetchLocal(src.url, h) else Net.get(src.url, h, 20)
             }
             groups = withContext(Dispatchers.Default) { parse(text) }
             loadedFor = src.url

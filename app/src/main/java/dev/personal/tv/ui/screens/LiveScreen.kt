@@ -161,7 +161,7 @@ fun LiveScreen(mem: FocusMemory) {
                             ) {
                                 T(c.name, 13.sp, Palette.T1, FontWeight.SemiBold)
                                 T(
-                                    (if (c.name == Live.lastChannel) "上次看的 · " else "") + if (c.urls.size > 1) "${c.urls.size} 个信号" else "",
+                                    listOfNotNull("上次看的".takeIf { c.name == Live.lastChannel }, "${c.urls.size} 个信号".takeIf { c.urls.size > 1 }).joinToString(" · "),
                                     9.sp, Palette.T3,
                                 )
                             }
@@ -347,7 +347,7 @@ fun LivePlayer(r: Route.LivePlay) {
 }
 
 @OptIn(UnstableApi::class)
-private fun why(e: PlaybackException): String {
+internal fun why(e: PlaybackException): String {
     var c: Throwable? = e
     while (c != null) {
         if (c is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) return "信号源返回 ${c.responseCode}"
