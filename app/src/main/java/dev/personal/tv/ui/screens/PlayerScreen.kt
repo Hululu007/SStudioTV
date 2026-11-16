@@ -315,10 +315,12 @@ fun PlayerScreen(r: Route.Player) {
             enter = slideInHorizontally(tween(260)) { it } + fadeIn(tween(200)),
             exit = slideOutHorizontally(tween(220)) { it } + fadeOut(tween(200)),
         ) {
-            LineSheet(ps, pos, onClose = { sheet = false }) { l ->
+            // 还没出画面（在找线路、解析）时播放器的位置是 0，按「看到哪儿」算
+            val at = (ps.here() / 1000).toInt()
+            LineSheet(ps, at, onClose = { sheet = false }) { l ->
                 sheet = false
                 ps.switchLine(l)
-                nav.toast("切换到 ${l.siteName} · ${l.flag}" + if (pos > 0) "，从 ${fmtTime(pos)} 继续" else "")
+                nav.toast("切换到 ${l.siteName} · ${l.flag}" + if (at > 0) "，从 ${fmtTime(at)} 继续" else "")
             }
         }
     }

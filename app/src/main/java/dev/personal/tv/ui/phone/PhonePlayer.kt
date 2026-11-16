@@ -287,10 +287,13 @@ fun PhonePlayer(r: Route.Player) {
             ) {
                 when (panel) {
                     Panel.EPISODES -> EpisodePanel(ps) { i, name -> ps.playEpisode(i, name); panel = null }
-                    Panel.LINES -> LinePanel(ps, pos) { l ->
-                        panel = null
-                        ps.switchLine(l)
-                        nav.toast("切换到 ${l.siteName} · ${l.flag}" + if (pos > 0) "，从 ${fmtTime(pos)} 继续" else "")
+                    Panel.LINES -> {
+                        val at = (ps.here() / 1000).toInt()
+                        LinePanel(ps, at) { l ->
+                            panel = null
+                            ps.switchLine(l)
+                            nav.toast("切换到 ${l.siteName} · ${l.flag}" + if (at > 0) "，从 ${fmtTime(at)} 继续" else "")
+                        }
                     }
                     Panel.SPEED -> SpeedPanel(ps)
                     null -> {}

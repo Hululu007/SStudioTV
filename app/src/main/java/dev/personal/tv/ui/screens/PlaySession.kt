@@ -146,6 +146,11 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     private var pausedAt = 0L
     /** 退到后台时停掉播放器（放掉解码器），记下位置，回来按 OK 从这里重新解析 */
     private var resumeMs = -1L
+    /**
+     * 看到哪儿了：开始一次播放时是打算从哪儿放，出画面以后跟着播放器走。
+     * 还在找线路、解析时播放器里是空的（位置是 0），换线、重试、自动换线都按这个，进度不丢。
+     */
+    private var wantMs by mutableLongStateOf(0L)
     /** 连着自动放了几集、最后一次按遥控器的时间 */
     private var autoPlays = 0
     private var lastTouch = System.currentTimeMillis()
@@ -193,11 +198,13 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
                 failover("播放出错（${e.errorCodeName}）")
             }
         })
+        current = java.lang.ref.WeakReference(this)
         val prev = Store.progress[t.id]
         val same = prev != null && if (startName != null && prev.epName != null) Eps.same(startName, prev.epName, t.name) else prev.ep == startEp
         if (same && startName == null) epName = prev!!.epName
         val startMs = if (same && !prev!!.finishedEp) prev.positionSec * 1000L else 0L
-        pinned = prev?.pinned == true
+        // 继续观看：上次在哪条线路看的就先用哪条（排在优先站点前面），那条播不了才换
+        pinned = prev?.line != null
         start(startEp, startMs, prev?.line)
         scope.launch {
             var tick = 0
@@ -210,6 +217,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
                 if (player.playbackState != Player.STATE_IDLE) {
                     posMs = player.currentPosition
                     durMs = player.duration.coerceAtLeast(0)
+                    if (phase == Phase.PLAY) wantMs = posMs
                 }
                 // 播放中途卡住太久也算这条线路不行
                 if (status == null && !hidden && player.playWhenReady && bufferingSince > 0 && player.playbackState == Player.STATE_BUFFERING &&
@@ -238,6 +246,8 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         job?.cancel()
         stopPrefetch()
         this.ep = ep
+        wantMs = startMs
+        Log.i(TAG, "start 第 $ep 集 · 从 ${startMs / 1000}s · 先试 ${only?.key ?: first?.key ?: prefer}${if (pinned) "（固定）" else ""}")
         enter(Phase.FIND)
         manual = only != null
         fail = null
@@ -317,8 +327,12 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         tried.clear()
         set.failed.remove(l.key)
         pinned = true
-        start(ep, player.currentPosition.coerceAtLeast(0), l.key, only = l)
+        start(ep, here(), l.key, only = l)
     }
+
+    /** 现在看到哪儿：出画面了就是播放器的位置，还在找线路、解析（播放器里是空的）就是这次打算从哪儿放 */
+    fun here(): Long =
+        if (phase == Phase.PLAY && player.playbackState != Player.STATE_IDLE) player.currentPosition.coerceAtLeast(0) else wantMs
 
     /** App 在后台（主页键、屏保）：正在找线路、解析的，加载好了也先别播 */
     private var hidden = false
@@ -354,7 +368,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         if (l != null && fail == null && status == null &&
             (player.playbackState == Player.STATE_IDLE || pausedAt > 0 && System.currentTimeMillis() - pausedAt > 15 * 60_000)
         ) {
-            val pos = if (resumeMs >= 0) resumeMs else player.currentPosition.coerceAtLeast(0)
+            val pos = if (resumeMs >= 0) resumeMs else here()
             tried.clear()
             start(ep, pos, l.key, first = l)
             return
@@ -367,12 +381,20 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         if (fail == null) return
         if (set.done && set.lines.isEmpty()) set = Lines.find(ctx, t, force = true)
         tried.clear()
-        start(ep, posMs.coerceAtLeast(0), line?.key)
+        start(ep, here(), line?.key)
     }
-    fun seekBy(sec: Int) { player.seekTo((player.currentPosition + sec * 1000L).coerceIn(0, durMs.takeIf { it > 0 } ?: Long.MAX_VALUE)); posMs = player.currentPosition }
+    fun seekBy(sec: Int) { player.seekTo((player.currentPosition + sec * 1000L).coerceIn(0, durMs.takeIf { it > 0 } ?: Long.MAX_VALUE)); posMs = player.currentPosition; if (phase == Phase.PLAY) wantMs = posMs }
     fun setRate(r: Float) { speed = r; player.setPlaybackSpeed(r) }
 
     fun save() {
+        // 还没出画面（在找线路、解析、换的线路播不了）：线路不记（别把播不了的那条记成上次看的），
+        // 同一集的记录只更新看到哪儿，换线没成功就退出来也不丢进度
+        if (phase != Phase.PLAY) {
+            val p = Store.progress[t.id] ?: return
+            val same = if (epName != null && p.epName != null) Eps.same(epName!!, p.epName, t.name) else p.ep == (nameNumber ?: ep)
+            if (same && p.durationSec > 0 && wantMs > 0) Store.progress[t.id] = p.copy(positionSec = (wantMs / 1000).toInt(), lastWatched = System.currentTimeMillis())
+            return
+        }
         if (line == null || durMs <= 0) return
         val num = nameNumber
         Store.progress[t.id] = Progress(
@@ -412,7 +434,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             return
         }
         notice = "${l.siteName} $why，换下一条线路"
-        start(ep, player.currentPosition.coerceAtLeast(0), null)
+        start(ep, here(), null)
     }
 
     private suspend fun run(startMs: Long, prefer: String?, only: PlayLine?, first: PlayLine?) {
@@ -435,13 +457,13 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         }
         val t0 = System.currentTimeMillis()
         while (true) {
-            // 线路是陆续搜到的：先等一会儿上次能播的那条（12 秒）、优先站点（15 秒，单站超时就是 15 秒）和直链（6 秒），
+            // 线路是陆续搜到的：先等一会儿上次能播的那条（20 秒，那个站排在最前面搜）、优先站点（15 秒，单站超时就是 15 秒）和直链（6 秒），
             // 别抓到第一条需要解析的就播
             if (only == null && first == null && !set.done) {
                 val age = System.currentTimeMillis() - t0
                 // 上次那个站已经搜完了（这次没搜到）、换了片源没有这个站、被屏蔽了：不用等
                 val prevSite = prefer?.substringBefore('|')
-                val waitPrev = prefer != null && set.lines.none { it.key == prefer } && age < 12_000 &&
+                val waitPrev = prefer != null && set.lines.none { it.key == prefer } && age < 20_000 &&
                     prevSite !in set.doneSites && prevSite !in Prefs.blocked && c.sites.any { it.key == prevSite }
                 val waitPreferred = Prefs.preferred.isNotEmpty() && age < 15_000 &&
                     set.lines.none { Prefs.rank(it.siteKey) != null && it.key !in tried } &&
@@ -814,6 +836,9 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         fun aheadText(s: Int) = if (s < 60) "$s 秒" else "${s / 60} 分 %02d 秒".format(s % 60)
 
         private val clock = java.text.SimpleDateFormat("HH:mm", java.util.Locale.CHINA)
+
+        /** 正在播放的那个（只给 debug 广播用） */
+        var current: java.lang.ref.WeakReference<PlaySession>? = null
 
         /** 本地下载的「线路」 */
         const val LOCAL = "local"

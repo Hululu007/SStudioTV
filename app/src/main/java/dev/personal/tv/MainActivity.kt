@@ -57,6 +57,14 @@ class MainActivity : ComponentActivity() {
                         }
                         return
                     }
+                    // --es line 站名或线路 key：正在播放的换到这条线路（测换线进度）
+                    i.getStringExtra("line")?.let { q ->
+                        val ps = dev.personal.tv.ui.screens.PlaySession.current?.get()
+                        val l = ps?.set?.lines?.firstOrNull { it.key != ps.line?.key && (it.key.contains(q) || it.siteName.contains(q)) }
+                        android.util.Log.i("Lab", "line「$q」→ ${l?.key} · 现在 ${ps?.here()?.div(1000)}s")
+                        if (l != null) ps.switchLine(l)
+                        return
+                    }
                     // --es use 片源名：切换当前片源
                     i.getStringExtra("use")?.let { n -> dev.personal.tv.source.Sources.list.firstOrNull { it.name.contains(n) || it.url.contains(n) }?.let { dev.personal.tv.source.Sources.select(it) }; android.util.Log.i("Lab", "use ${dev.personal.tv.source.Sources.name}"); return }
                     // --es go pans：直接打开网盘登录页

@@ -125,13 +125,13 @@ object Lines {
     }
 
     /**
-     * 播放时的尝试顺序：手动选过的那条 → 设置里「优先」的站点（按排名）→ 上次能播的 → 直链 → 普通网页 → VIP 网页（要解析接口）。
+     * 播放时的尝试顺序：手动选过的、继续观看时上次看的那条 → 设置里「优先」的站点（按排名）→ 上次能播的 → 直链 → 普通网页 → VIP 网页（要解析接口）。
      * 播放失败过的排到后面。
      */
     fun ordered(set: LineSet, prefer: String?, vipFlags: List<String>, pinned: Boolean = false): List<PlayLine> {
         val origin = SourceSearch.origin(set.titleId)?.siteKey
         return set.lines.sortedWith(
-            compareByDescending<PlayLine> { pinned && it.key == prefer }
+            compareByDescending<PlayLine> { pinned && it.key == prefer && it.key !in set.failed }
                 .thenBy { it.key in set.failed }
                 // 网盘线路（夸克原画、百度…）没登录那家网盘时播不了，插件还常常卡到超时：排到能直接播的后面
                 .thenBy { panLocked(it.flag) }
@@ -257,7 +257,10 @@ object Lines {
                 it.key != origin?.first?.key
         }
         // 先搜当前片源；其它片源的采集站只在值得的时候补搜（见 [needMore]），而且只留比当前片源好的线路（[worth]）
-        val (cross, sites) = usable.partition { CrossSources.isCross(it) }
+        // 继续观看时上次那个站排最前面先搜（播放在等它）；是其它片源的站也跟当前片源一起先搜
+        val last = dev.personal.tv.data.Store.progress[t.id]?.line?.substringBefore('|')
+        val (cross, sites) = usable.partition { CrossSources.isCross(it) && it.key != last }
+            .let { (c, s) -> c to s.sortedByDescending { it.key == last } }
         set.total = sites.size + (if (origin != null) 1 else 0)
         val q = Match.query(t.name)
         Log.i(TAG, "${t.name} → 「$q」· ${sites.size} 个站点")
