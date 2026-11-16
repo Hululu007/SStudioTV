@@ -90,7 +90,7 @@ fun SettingsScreen() {
             ) { fg -> T("›", 16.sp, fg) }
             if (!Sources.empty) Row(
                 "网盘登录",
-                PanLogin.loggedIn().takeIf { it.isNotEmpty() }?.let { "已登录 ${it.joinToString("、")}" } ?: "夸克、UC、百度、115… 每家分开扫码登录",
+                dev.personal.tv.source.PluginNotes.loginHint() ?: PanLogin.loggedIn().takeIf { it.isNotEmpty() }?.let { "已登录 ${it.joinToString("、")}" } ?: "夸克、UC、百度、115… 每家分开扫码登录",
                 Modifier.remembered(mem, "pans"),
                 onClick = { nav.openPans() },
             ) { fg -> T("›", 16.sp, fg) }

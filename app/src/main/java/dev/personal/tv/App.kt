@@ -22,7 +22,7 @@ class App : Application(), ImageLoaderFactory {
         if (Build.VERSION.SDK_INT >= 28 && proc != packageName) {
             runCatching { WebView.setDataDirectorySuffix(proc.substringAfter(':')) }
         }
-        if (proc.endsWith(":spider")) { guardPluginCrashes(); dev.personal.tv.spider.QuietToasts.install() }
+        if (proc.endsWith(":spider")) { guardPluginCrashes(); dev.personal.tv.spider.QuietToasts.install(this) }
         dev.personal.tv.source.ConfigLoader.assets = assets
         dev.personal.tv.source.ConfigLoader.dir = filesDir
         // 片库和本地记录只在主进程用，插件进程不加载
@@ -38,6 +38,7 @@ class App : Application(), ImageLoaderFactory {
             Sources.init(this)
             dev.personal.tv.source.CrossSources.init(this)
             dev.personal.tv.source.Updater.init(this)
+            dev.personal.tv.source.PluginNotes.init(this)
             dev.personal.tv.source.Live.init(this)
             dev.personal.tv.data.SearchIndex.init(this)
         }

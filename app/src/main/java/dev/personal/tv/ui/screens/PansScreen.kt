@@ -73,6 +73,8 @@ fun PansScreen() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val first = remember { FocusRequester() }
+    // 进过网盘登录页，设置里挂着的「插件提示要登录」就收起来
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { dev.personal.tv.source.PluginNotes.clearLogin() } }
 
     var base by remember { mutableStateOf<PluginPortal.Base?>(null) }
     var err by remember { mutableStateOf<String?>(null) }

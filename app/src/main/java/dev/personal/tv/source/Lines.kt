@@ -101,6 +101,9 @@ object Lines {
     /** 播放正在解析时 > 0：线路搜索先不开新的站点，把插件进程让给播放（实测并发搜索时解析从 4 秒拖到 36 秒） */
     private val playing = MutableStateFlow(0)
 
+    /** 正在解析播放（用户自己点的线路）：插件这时候的提示要给用户看（见 [PluginNotes]） */
+    val resolving get() = playing.value > 0
+
     suspend fun <T> yieldTo(block: suspend () -> T): T {
         playing.value++
         try { return block() } finally { playing.value-- }

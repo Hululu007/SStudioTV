@@ -115,7 +115,7 @@ fun PhoneMine(header: Boolean = true) {
                 Divider()
                 SettingRow(
                     "网盘登录",
-                    PanLogin.loggedIn().takeIf { it.isNotEmpty() }?.let { "已登录 ${it.joinToString("、")}" } ?: "夸克、UC、百度、115… 网盘线路要先登录",
+                    dev.personal.tv.source.PluginNotes.loginHint() ?: PanLogin.loggedIn().takeIf { it.isNotEmpty() }?.let { "已登录 ${it.joinToString("、")}" } ?: "夸克、UC、百度、115… 网盘线路要先登录",
                     onClick = { nav.openPans() },
                 ) { Arrow() }
                 Divider()
@@ -465,6 +465,7 @@ fun PhonePans() {
 
     web?.let { u -> PluginWeb(u) { web = null; base?.let { b -> scope.launch { refresh(b) } } }; return }
 
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { dev.personal.tv.source.PluginNotes.clearLogin() } }
     SubPage("网盘登录") {
         val b = base
         val a = alt
