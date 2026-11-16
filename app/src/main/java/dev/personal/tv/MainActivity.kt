@@ -60,6 +60,14 @@ class MainActivity : ComponentActivity() {
                     // --es use 片源名：切换当前片源
                     i.getStringExtra("use")?.let { n -> dev.personal.tv.source.Sources.list.firstOrNull { it.name.contains(n) || it.url.contains(n) }?.let { dev.personal.tv.source.Sources.select(it) }; android.util.Log.i("Lab", "use ${dev.personal.tv.source.Sources.name}"); return }
                     // --es go pans：直接打开网盘登录页
+                    i.getStringExtra("addsrc")?.let { u ->
+                        lifecycleScope.launch {
+                            runCatching { dev.personal.tv.source.Sources.add(i.getStringExtra("name"), u) }
+                                .onSuccess { it.firstOrNull()?.let { e -> dev.personal.tv.source.Sources.select(e) }; android.util.Log.i("Lab", "added+use ${it.firstOrNull()?.name}") }
+                                .onFailure { android.util.Log.w("Lab", "addsrc", it) }
+                        }
+                        return
+                    }
                     if (i.getStringExtra("go") == "pans") { dev.personal.tv.ui.Navigator.current?.openPans(); return }
                     if (i.getStringExtra("go") == "downloads") { dev.personal.tv.ui.Navigator.current?.openDownloads(); return }
                     val cfg = i.getStringExtra("cfg") ?: dev.personal.tv.source.Sources.url ?: return
@@ -68,6 +76,7 @@ class MainActivity : ComponentActivity() {
                         return
                     }
                     i.getStringExtra("dump")?.let { k ->
+                        val act = i.getStringExtra("act"); if (act != null) System.setProperty("dump.action", act) else System.clearProperty("dump.action")
                         lifecycleScope.launch { runCatching { Lab.dump(applicationContext, cfg, k) }.onFailure { android.util.Log.w("Dump", "dump", it) } }
                         return
                     }

@@ -173,6 +173,10 @@ fun PhoneMine(header: Boolean = true) {
 
         Group("界面")
         Card {
+            ScaleSlider("文字大小", Prefs.textScale, Prefs.TEXT_RANGE, Prefs.textDefault) { Prefs.textScale = it }
+            Divider()
+            ScaleSlider("海报大小", Prefs.posterScale, Prefs.POSTER_RANGE, Prefs.posterDefault) { Prefs.posterScale = it }
+            Divider()
             val cur = remember { UiMode.choice(ctx) }
             Column(Modifier.padding(horizontal = PC.Edge, vertical = 12.dp)) {
                 Tx("用哪套界面", 15.sp)
@@ -226,6 +230,26 @@ fun PhoneMine(header: Boolean = true) {
 @Composable
 private fun Group(text: String) =
     Tx(text, 13.sp, Palette.T3, FontWeight.SemiBold, modifier = Modifier.padding(start = PC.Edge + 4.dp, top = 18.dp, bottom = 6.dp))
+
+/** 无极调节：拖动时界面跟着变；点右边的百分比恢复默认 */
+@Composable
+private fun ScaleSlider(title: String, v: Float, range: ClosedFloatingPointRange<Float>, def: Float, set: (Float) -> Unit) {
+    Column(Modifier.padding(start = PC.Edge, end = PC.Edge, top = 12.dp, bottom = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Tx(title, 15.sp, modifier = Modifier.weight(1f))
+            Tx(
+                if (v == def) Prefs.pct(v) else "${Prefs.pct(v)} · 恢复默认", 13.sp, if (v == def) Palette.T3 else Palette.Douban,
+                modifier = Modifier.clickable(enabled = v != def) { set(def) }.padding(vertical = 4.dp),
+            )
+        }
+        androidx.compose.material3.Slider(
+            v, set, valueRange = range,
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = Color.White, activeTrackColor = Palette.Douban, inactiveTrackColor = Color.White.copy(alpha = 0.12f),
+            ),
+        )
+    }
+}
 
 @Composable
 private fun Arrow() = Tx("›", 20.sp, Palette.T3)

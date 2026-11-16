@@ -1,5 +1,6 @@
 package dev.personal.tv.ui.screens
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -309,7 +310,7 @@ private fun SrcButton(title: String, sub: String, modifier: Modifier, onClick: (
 @Composable
 private fun Key(label: String, modifier: Modifier, size: androidx.compose.ui.unit.TextUnit = 14.sp, onClick: () -> Unit) {
     Focusable(onClick, modifier, corner = 7.dp, scale = 1.1f, ring = false) { f ->
-        Box(Modifier.fillMaxWidth().height(35.dp).background(if (f) Color.White else Palette.Ghost6), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().heightIn(min = 35.dp).background(if (f) Color.White else Palette.Ghost6), contentAlignment = Alignment.Center) {
             T(label, size, if (f) Palette.Bg else Palette.T2, FontWeight.SemiBold)
         }
     }

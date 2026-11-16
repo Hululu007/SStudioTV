@@ -88,8 +88,13 @@ data class LiveCfg(val name: String, val url: String, val ua: String?, val heade
 
 object ConfigLoader {
 
+    /** 包里自带的配置文件（asset://名字），只有自己测的包里有；App 启动时设上 */
+    var assets: android.content.res.AssetManager? = null
+
     fun load(url: String): TvConfig {
-        val raw = Net.get(url, timeoutSec = 30)
+        val raw = if (url.startsWith("asset://")) {
+            (assets ?: error("asset 不可用")).open(url.removePrefix("asset://")).bufferedReader().use { it.readText() }
+        } else Net.get(url, timeoutSec = 30)
         val text = decode(raw)
         return parse(url, text)
     }

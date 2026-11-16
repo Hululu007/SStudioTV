@@ -1,5 +1,6 @@
 package dev.personal.tv.ui.screens
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -261,7 +262,7 @@ private fun OptionList(options: List<String>, value: Int, pick: (Int) -> Unit) {
                         corner = 6.dp, scale = 1.03f, ring = false,
                     ) { f ->
                         Row(
-                            Modifier.fillMaxWidth().height(26.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 10.dp),
+                            Modifier.fillMaxWidth().heightIn(min = 26.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 10.dp, vertical = 3.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             T(

@@ -60,6 +60,7 @@ import dev.personal.tv.ui.screens.FindFilter
 import dev.personal.tv.ui.screens.FindPages
 import dev.personal.tv.ui.screens.GENRES
 import dev.personal.tv.ui.screens.HOME
+import kotlinx.coroutines.launch
 import dev.personal.tv.ui.screens.KINDS
 import dev.personal.tv.ui.screens.LISTS
 import dev.personal.tv.ui.screens.REGIONS
@@ -255,12 +256,14 @@ private fun SiteFind() {
             else -> PosterGrid(grid, if (ratio >= 1.2f) GridCells.Adaptive(160.dp) else PosterCols) {
                 itemsIndexed(page.items, key = { _, t -> t.id }) { _, t ->
                     val fid = page.folders[t.id]
+                    val act = page.actions[t.id]
                     PosterTile(
-                        t, ratio = ratio, badge = if (fid != null) "文件夹" else null,
+                        t, ratio = ratio, badge = if (fid != null) "文件夹" else if (act != null) "设置" else null,
                         sub = t.year.takeIf { it > 0 }?.toString().orEmpty(),
-                        onLong = if (fid == null) ({ nav.posterMenu(t) }) else null,
+                        onLong = if (fid == null && act == null) ({ nav.posterMenu(t) }) else null,
                     ) {
-                        if (fid != null) trailS = (trail + (fid to t.name)).joinToString("\n") { "${it.first}\u0001${it.second}" }
+                        if (act != null) scope.launch { dev.personal.tv.ui.screens.openAction(ctx, site, act, folder ?: cls.takeIf { it != HOME }) }
+                        else if (fid != null) trailS = (trail + (fid to t.name)).joinToString("\n") { "${it.first}\u0001${it.second}" }
                         else nav.openDetail(t.id)
                     }
                 }

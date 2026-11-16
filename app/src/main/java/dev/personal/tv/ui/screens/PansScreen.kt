@@ -1,5 +1,6 @@
 package dev.personal.tv.ui.screens
 
+import androidx.compose.foundation.layout.heightIn
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.foundation.Image
@@ -339,7 +340,7 @@ private fun PanRow(
     Focusable(onClick, modifier.fillMaxWidth(), corner = 9.dp, scale = 1.02f, ring = false, onMenu = onMenu, onFocus = onFocus) { f ->
         val fg = if (f) Palette.Bg else Palette.T1
         Row(
-            Modifier.fillMaxWidth().height(46.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp),
+            Modifier.fillMaxWidth().heightIn(min = 46.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {

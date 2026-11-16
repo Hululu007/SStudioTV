@@ -80,12 +80,23 @@ object JarLoader {
         error("下载到的不是 jar（找不到 zip 头）")
     }
 
-    /** 本地代理请求：调用 jar 里的 com.github.catvod.spider.Proxy.proxy(Map) */
+    /**
+     * 本地代理请求：调用 jar 里的 com.github.catvod.spider.Proxy.proxy(Map)。
+     * 先给最近用过的 jar；它不认（返回 null）再挨个问别的已加载 jar——一个片源常常有好几个 jar，
+     * 配置中心（do=pan）在主 jar 里，而最近用的可能是某个站点自带的 jar。
+     */
     fun proxy(params: Map<String, String>): Array<Any?>? {
-        val loader = recent ?: return null
-        val m = loader.loadClass("com.github.catvod.spider.Proxy").getMethod("proxy", Map::class.java)
-        @Suppress("UNCHECKED_CAST")
-        return m.invoke(null, params) as Array<Any?>?
+        val first = recent
+        val order = listOfNotNull(first) + jars.values.map { it.loader }.filter { it !== first }
+        for (loader in order) {
+            val r = runCatching {
+                val m = loader.loadClass("com.github.catvod.spider.Proxy").getMethod("proxy", Map::class.java)
+                @Suppress("UNCHECKED_CAST")
+                m.invoke(null, params) as Array<Any?>?
+            }.onFailure { Log.d(TAG, "proxy ${params["do"]}: ${it.javaClass.simpleName}") }.getOrNull()
+            if (r != null && r.size >= 3) return r
+        }
+        return null
     }
 
     private fun md5Hex(b: ByteArray) = MessageDigest.getInstance("MD5").digest(b).joinToString("") { "%02x".format(it) }

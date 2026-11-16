@@ -29,6 +29,8 @@ data class Vod(
     val tag: String = "",
     /** 海报宽高比（宽 / 高），插件用 style 指定；null = 默认竖版 */
     val ratio: Float? = null,
+    /** 影视仓的 action：点了不进详情，而是调插件的 action(…)（网盘登录、清 Cookie、推送授权这类设置项），插件常常自己弹对话框 */
+    val action: String = "",
 ) {
     val folder get() = tag == "folder"
 }
@@ -126,6 +128,7 @@ object VodJson {
             flags = flags,
             tag = o.str("vod_tag").orEmpty(),
             ratio = style(o),
+            action = o.str("action").orEmpty(),
         )
     }
 }

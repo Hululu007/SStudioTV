@@ -1,5 +1,6 @@
 package dev.personal.tv.ui.screens
 
+import androidx.compose.foundation.layout.heightIn
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
@@ -128,7 +129,7 @@ fun LiveScreen(mem: FocusMemory) {
                             onFocus = { gi = i },
                         ) { f ->
                             Row(
-                                Modifier.fillMaxWidth().height(36.dp)
+                                Modifier.fillMaxWidth().heightIn(min = 36.dp)
                                     .background(when { f -> Color.White; i == gi -> Palette.Ghost; else -> Color.Transparent })
                                     .padding(horizontal = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -154,7 +155,7 @@ fun LiveScreen(mem: FocusMemory) {
                             corner = 10.dp, scale = 1.05f,
                         ) { f ->
                             Column(
-                                Modifier.fillMaxWidth().height(64.dp)
+                                Modifier.fillMaxWidth().heightIn(min = 64.dp)
                                     .background(if (c.name == Live.lastChannel) Palette.Ghost else Palette.Ghost6)
                                     .padding(horizontal = 12.dp, vertical = 10.dp),
                                 verticalArrangement = Arrangement.SpaceBetween,
@@ -379,7 +380,7 @@ private fun ChannelPicker(curG: Int, curC: Int, onPick: (Int, Int) -> Unit) {
                     onClick = { g = i }, modifier = Modifier.fillMaxWidth(), corner = 8.dp, scale = 1.03f, ring = false, onFocus = { g = i },
                 ) { f ->
                     Box(
-                        Modifier.fillMaxWidth().height(34.dp)
+                        Modifier.fillMaxWidth().heightIn(min = 34.dp)
                             .background(when { f -> Color.White; i == g -> Palette.Ghost; else -> Color.Transparent })
                             .padding(horizontal = 10.dp),
                         contentAlignment = Alignment.CenterStart,
@@ -397,7 +398,7 @@ private fun ChannelPicker(curG: Int, curC: Int, onPick: (Int, Int) -> Unit) {
                     corner = 8.dp, scale = 1.03f, ring = false,
                 ) { f ->
                     Row(
-                        Modifier.fillMaxWidth().height(38.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp),
+                        Modifier.fillMaxWidth().heightIn(min = 38.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp, vertical = 3.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         T(c.name, 12.5.sp, if (f) Palette.Bg else Palette.T1, if (playing) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f))

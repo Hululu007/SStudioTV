@@ -1,5 +1,6 @@
 package dev.personal.tv.ui.screens
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -390,7 +391,7 @@ private fun ControlButtons(
 private fun CtlChip(text: String, lit: Boolean = false, onClick: () -> Unit) {
     Focusable(onClick, corner = 12.dp, scale = 1.05f, ring = false) { f ->
         Row(
-            Modifier.height(24.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 9.dp),
+            Modifier.heightIn(min = 24.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 9.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             if (lit) Box(Modifier.size(5.dp).background(Palette.Star, CircleShape))
@@ -482,7 +483,7 @@ private fun SheetRow(
     Focusable(onClick, modifier.fillMaxWidth().padding(vertical = 1.dp), corner = 9.dp, scale = 1.03f, ring = false) { f ->
         val fg = if (f) Palette.Bg else Palette.T1
         Row(
-            Modifier.fillMaxWidth().height(44.dp).background(if (f) Color.White else Color.Transparent)
+            Modifier.fillMaxWidth().heightIn(min = 44.dp).background(if (f) Color.White else Color.Transparent)
                 .padding(horizontal = 13.dp)
                 .then(if (dim && !f) Modifier.drawBehind { } else Modifier),
             verticalAlignment = Alignment.CenterVertically,

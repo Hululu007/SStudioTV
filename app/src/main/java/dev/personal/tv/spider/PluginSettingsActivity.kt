@@ -1,5 +1,6 @@
 package dev.personal.tv.spider
 
+import androidx.compose.foundation.layout.heightIn
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -74,9 +76,16 @@ class PluginSettingsActivity : ComponentActivity() {
 
     /** 对话框关掉后窗口重新拿到焦点，刷新一下当前分类（登录状态会变） */
     private var focusTick by mutableIntStateOf(0)
+    /** 进来要先调的 action，页面可见后调一次 */
+    private var pendingRun: String? = null
+    private var startCls: String? = null
+    /** 插件 action 返回的二维码（有的插件不自己弹框，而是返回 {"action":{…,"qrcode":…}}） */
+    private var qr by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 插件进程里没初始化过设置：字号要跟主界面一样
+        dev.personal.tv.data.Prefs.init(applicationContext)
         val i = intent
         val jar = i.getStringExtra("jar") ?: return finish()
         val md5 = i.getStringExtra("md5")
@@ -84,6 +93,8 @@ class PluginSettingsActivity : ComponentActivity() {
         val api = i.getStringExtra("api") ?: return finish()
         val ext = i.getStringExtra("ext").orEmpty()
         val name = i.getStringExtra("name") ?: "插件设置"
+        pendingRun = i.getStringExtra("run")
+        startCls = i.getStringExtra("cls")
         // 手机：竖屏、触屏布局；电视：横屏、遥控器布局
         val phone = i.getBooleanExtra("phone", false)
         requestedOrientation = if (phone) UiMode.browseOrientation(this) else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -91,6 +102,18 @@ class PluginSettingsActivity : ComponentActivity() {
             if (phone) PhoneTheme { Screen(name, true) { JarLoader.spider(applicationContext, jar, md5, key, api, ext) } }
             else AppTheme { Screen(name, false) { JarLoader.spider(applicationContext, jar, md5, key, api, ext) } }
         }
+    }
+
+    /** 插件 action 的返回：空（自己弹框了）、一句话、{"msg":…}、或 {"action":{"msg"/"title"/"qrcode"…}} */
+    private fun actionNote(r: String): String {
+        val t = r.trim()
+        if (t.isEmpty()) return ""
+        val o = runCatching { com.google.gson.JsonParser.parseString(t).asJsonObject }.getOrNull()
+            ?: return t.take(200)
+        fun com.google.gson.JsonObject.s(k: String) = get(k)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() }
+        val a = o.get("action")?.takeIf { it.isJsonObject }?.asJsonObject
+        qr = a?.s("qrcode") ?: a?.s("qrCode") ?: o.s("qrcode")
+        return listOfNotNull(a?.s("title"), a?.s("msg") ?: a?.s("tip"), o.s("msg")).distinct().joinToString("\n")
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -121,7 +144,7 @@ class PluginSettingsActivity : ComponentActivity() {
                     val s = load()
                     val p = VodJson.page(s.homeContent(true).orEmpty())
                     sp = s; classes = p.classes; home = p.list
-                    if (p.list.isEmpty()) cls = p.classes.firstOrNull()?.id
+                    cls = startCls?.takeIf { c -> p.classes.any { it.id == c } } ?: if (p.list.isEmpty()) p.classes.firstOrNull()?.id else null
                 }.onFailure { err = "插件打不开：${it.message?.take(80)}"; Log.w(TAG, "load", it) }
             }
         }
@@ -137,22 +160,37 @@ class PluginSettingsActivity : ComponentActivity() {
         }
         LaunchedEffect(classes) { if (!phone && (classes.isNotEmpty() || home.isNotEmpty())) { delay(80); runCatching { first.requestFocus() } } }
 
-        fun open(v: Vod) {
+        /**
+         * 点一项：有 action 的调插件 action（新式写法：肥猫、饭太硬…），没有的照老办法打开详情（摸鱼儿）。
+         * 插件多半自己弹对话框（扫码、输入）；返回了文字或 {"action":{…}} 的，把说明和二维码显示在页面上。
+         */
+        fun fire(label: String, action: String?, id: String?) {
             val s = sp ?: return
             if (busy) return
             busy = true
-            note = "正在打开「${v.name}」…"
+            qr = null
+            note = "正在打开「$label」…"
             scope.launch {
-                // 插件在这里弹对话框（扫码、输入）；返回的详情里有说明文字的话显示出来
-                val r = withContext(Dispatchers.IO) { runCatching { s.detailContent(listOf(v.id)).orEmpty() } }
+                val r = withContext(Dispatchers.IO) {
+                    runCatching { if (action != null) s.action(action).orEmpty() else s.detailContent(listOf(id.orEmpty())).orEmpty() }
+                }
                 busy = false
-                note = r.fold(
-                    { VodJson.page(it).list.firstOrNull()?.let { d -> d.content.ifBlank { d.remarks } }.orEmpty() },
-                    { "出错了：${it.message?.take(80)}" },
-                )
+                note = r.fold({ if (action != null) actionNote(it) else VodJson.page(it).list.firstOrNull()?.let { d -> d.content.ifBlank { d.remarks } }.orEmpty() },
+                    { "出错了：${it.message?.take(80)}" })
                 delay(600)
                 focusTick++
             }
+        }
+
+        fun open(v: Vod) = fire(v.name, v.action.ifEmpty { null }, v.id)
+
+        // 站点浏览里点的设置项：页面出来、窗口拿到焦点后再调（插件弹框要挂在可见的 Activity 上）
+        LaunchedEffect(sp) {
+            val a = pendingRun ?: return@LaunchedEffect
+            if (sp == null) return@LaunchedEffect
+            pendingRun = null
+            delay(400)
+            fire(items.firstOrNull { it.action == a }?.name ?: "设置", a, null)
         }
 
         if (phone) {
@@ -186,6 +224,7 @@ class PluginSettingsActivity : ComponentActivity() {
                     }
                 }
                 if (note.isNotBlank()) T(note, 10.5.sp, Palette.T2, lines = 4, modifier = Modifier.padding(top = 10.dp, start = 12.dp))
+                qr?.let { dev.personal.tv.ui.screens.QrImage(it, Modifier.padding(top = 10.dp, start = 12.dp).size(180.dp)) }
                 Row(Modifier.padding(top = 8.dp, start = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     Hint("OK", "打开（插件会弹出二维码或输入框）", 9.5.sp)
                     Hint("返回", "回到 SStudioTV", 9.5.sp)
@@ -206,6 +245,7 @@ class PluginSettingsActivity : ComponentActivity() {
             if (tabs.size > 1) {
                 PillRow(tabs.map { it?.name ?: "总览" }, tabs.indexOfFirst { it?.id == cls }.coerceAtLeast(0), Modifier.padding(bottom = 6.dp), strong = true) { pick(tabs[it]?.id) }
             }
+            qr?.let { dev.personal.tv.ui.screens.QrImage(it, Modifier.padding(horizontal = PC.Edge, vertical = 6.dp).size(220.dp)) }
             if (note.isNotBlank()) {
                 Tx(
                     note, 13.sp, Palette.T2, lines = 5, lineHeight = 19.sp,
@@ -241,8 +281,8 @@ class PluginSettingsActivity : ComponentActivity() {
         Focusable(onClick, modifier.fillMaxWidth(), corner = 9.dp, scale = 1.02f, ring = false, onFocus = onFocus) { f ->
             val fg = if (f) Palette.Bg else if (on) Palette.Douban else Palette.T1
             Row(
-                Modifier.fillMaxWidth().height(if (sub.isNullOrBlank()) 38.dp else 46.dp)
-                    .background(if (f) Color.White else Color.Transparent, RoundedCornerShape(9.dp)).padding(horizontal = 12.dp),
+                Modifier.fillMaxWidth().heightIn(min = if (sub.isNullOrBlank()) 38.dp else 46.dp)
+                    .background(if (f) Color.White else Color.Transparent, RoundedCornerShape(9.dp)).padding(horizontal = 12.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
@@ -257,9 +297,11 @@ class PluginSettingsActivity : ComponentActivity() {
     companion object {
         private const val TAG = "PluginSettings"
 
-        fun open(ctx: Context, jar: String, md5: String?, site: SiteCfg) {
+        /** [run]：打开后马上调的 action（站点浏览里点的设置项）；[cls]：先选中的分类 */
+        fun open(ctx: Context, jar: String, md5: String?, site: SiteCfg, run: String? = null, cls: String? = null) {
             ctx.startActivity(
                 Intent(ctx, PluginSettingsActivity::class.java).putExtra("phone", UiMode.phone(ctx))
+                    .putExtra("run", run).putExtra("cls", cls)
                     .putExtra("jar", jar).putExtra("md5", md5)
                     .putExtra("key", site.key).putExtra("api", site.api).putExtra("ext", site.ext)
                     .putExtra("name", site.name.replace(Regex("[^\\p{L}\\p{N} ]"), "").trim().ifEmpty { "插件设置" })

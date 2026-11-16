@@ -1,5 +1,13 @@
 package dev.personal.tv.ui.screens
 
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,7 +77,8 @@ fun SettingsScreen() {
         horizontalArrangement = Arrangement.spacedBy(36.dp),
     ) {
         // ---------------- 左：常规 ----------------
-        Column(Modifier.width(330.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        // 字放大以后一屏放不下：可以滚，焦点移过去自动滚到
+        Column(Modifier.width(330.dp).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             T("设置", 22.sp, weight = FontWeight.Bold, modifier = Modifier.padding(bottom = 14.dp, start = 12.dp))
             Section("片源")
             Row(
@@ -95,9 +104,8 @@ fun SettingsScreen() {
                 Toggle(Prefs.precache, onLight = fg == Palette.Bg)
             }
             Section("显示")
-            Row("海报大小 · ${Prefs.posterLabel}", "首页、找片、搜索、想看的海报都跟着变", Modifier.remembered(mem, "poster"), onClick = { Prefs.posterSize = (Prefs.posterSize + 1) % 3 }) { fg ->
-                T(listOf("小", "中", "大").joinToString("  ") { if (it == Prefs.posterLabel) "●$it" else it }, 11.sp, fg)
-            }
+            ScaleRow("文字大小", "整个界面的字", Prefs.textScale, Prefs.TEXT_RANGE, Prefs.textDefault, Modifier.remembered(mem, "text")) { Prefs.textScale = it }
+            ScaleRow("海报大小", "首页、找片、搜索、站点的海报", Prefs.posterScale, Prefs.POSTER_RANGE, Prefs.posterDefault, Modifier.remembered(mem, "poster")) { Prefs.posterScale = it }
             Section("片库")
             Row(
                 "搜索索引 · ${SearchIndex.size} 部",
@@ -177,6 +185,34 @@ private fun Section(text: String) {
     T(text, 10.sp, Palette.T3, FontWeight.SemiBold, modifier = Modifier.padding(start = 12.dp, top = 14.dp, bottom = 4.dp))
 }
 
+/**
+ * 无极调节的一行：← → 每次 5%，按住连续调；OK 恢复默认。右边一根条显示在范围里的位置。
+ * 调的时候整个界面跟着变，所见即所得。
+ */
+@Composable
+private fun ScaleRow(
+    title: String, sub: String, v: Float, range: ClosedFloatingPointRange<Float>, def: Float, modifier: Modifier, set: (Float) -> Unit,
+) {
+    val keys = Modifier.onPreviewKeyEvent { e ->
+        if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+        when (e.key) {
+            Key.DirectionLeft -> { set(v - 0.05f); true }
+            Key.DirectionRight -> { set(v + 0.05f); true }
+            else -> false
+        }
+    }
+    Row("$title · ${Prefs.pct(v)}", if (v == def) "$sub · ← → 调整" else "← → 调整 · OK 恢复 ${Prefs.pct(def)}", modifier.then(keys), onClick = { set(def) }) { fg ->
+        val f = ((v - range.start) / (range.endInclusive - range.start)).coerceIn(0f, 1f)
+        androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
+            T("‹", 14.sp, fg.copy(alpha = 0.7f))
+            Box(Modifier.padding(horizontal = 6.dp).width(64.dp).height(4.dp).background(fg.copy(alpha = 0.25f), RoundedCornerShape(2.dp))) {
+                Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(fg, RoundedCornerShape(2.dp)))
+            }
+            T("›", 14.sp, fg.copy(alpha = 0.7f))
+        }
+    }
+}
+
 @Composable
 private fun Row(
     title: String, sub: String, modifier: Modifier, dim: Boolean = false,
@@ -185,7 +221,7 @@ private fun Row(
     Focusable(onClick, modifier.fillMaxWidth().padding(vertical = 1.dp), corner = 9.dp, scale = 1.02f, ring = false, onMenu = onMenu) { f ->
         val fg = if (f) Palette.Bg else Palette.T1
         androidx.compose.foundation.layout.Row(
-            Modifier.fillMaxWidth().height(46.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp),
+            Modifier.fillMaxWidth().heightIn(min = 46.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {

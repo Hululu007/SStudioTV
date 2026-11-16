@@ -1,5 +1,6 @@
 package dev.personal.tv.ui.screens
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
@@ -93,6 +94,15 @@ internal class SitePage {
     var ratio by mutableStateOf<Float?>(null)
     /** 这一页里的文件夹：条目 id → 站点里的 vod_id（点开用 categoryContent 拉下一层） */
     val folders = HashMap<String, String>()
+    /** 这一页里的设置项（影视仓的 action）：条目 id → action。点了交给插件（[openAction]） */
+    val actions = HashMap<String, String>()
+}
+
+/** 点了站点里的设置项（网盘登录、清 Cookie…）：开插件进程里的设置页去调 action，插件弹的对话框才有地方挂 */
+internal suspend fun openAction(ctx: Context, s: SiteCfg, action: String, cls: String?) {
+    val cfg = runCatching { Sources.config() }.getOrNull() ?: return
+    val jar = s.jar ?: cfg.spider ?: return
+    dev.personal.tv.spider.PluginSettingsActivity.open(ctx, jar, if (s.jar == null) cfg.spiderMd5 else null, s, run = action, cls = cls)
 }
 
 internal object SitePages {
@@ -124,7 +134,7 @@ internal fun SitePage.load(ctx: Context, scope: CoroutineScope, s: SiteCfg, c: S
             if (p.ratio == null) p.ratio = got.ratio ?: got.list.firstNotNullOfOrNull { it.ratio }
             val have = p.items.map { it.id }.toHashSet()
             val fresh = got.list.filter { it.id.isNotBlank() && it.name.isNotBlank() }.mapNotNull { v ->
-                SourceSearch.siteTitle(s, v).takeIf { have.add(it.id) }?.also { if (v.folder) p.folders[it.id] = v.id }
+                SourceSearch.siteTitle(s, v).takeIf { have.add(it.id) }?.also { if (v.folder) p.folders[it.id] = v.id; if (v.action.isNotEmpty()) p.actions[it.id] = v.action }
             }
             p.items.addAll(fresh)
             p.page++
@@ -252,7 +262,7 @@ fun SitesScreen(mem: FocusMemory) {
                 var posterIdx by remember { mutableStateOf(-1) }
                 val classes = head.classes.orEmpty()
                 LazyRow(
-                    Modifier.fillMaxWidth().height(30.dp),
+                    Modifier.fillMaxWidth().heightIn(min = 30.dp),
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     contentPadding = PaddingValues(horizontal = 4.dp),
@@ -296,17 +306,19 @@ fun SitesScreen(mem: FocusMemory) {
                     ) {
                         itemsIndexed(page.items, key = { _, it -> it.id }) { i, t ->
                             val dir = page.folders[t.id]
+                            val act = page.actions[t.id]
                             PosterCell(
                                 t,
                                 focusModifier = Modifier.remembered(mem, "p:${t.id}"),
                                 onFocus = { posterIdx = i },
                                 onClick = {
-                                    if (dir != null) trailS = (trail + (dir to t.name.replace('\n', ' '))).joinToString("\n") { "${it.first}\u0001${it.second}" }
+                                    if (act != null) site?.let { st -> scope.launch { openAction(ctx, st, act, folder ?: cls.takeIf { it != HOME }) } }
+                                    else if (dir != null) trailS = (trail + (dir to t.name.replace('\n', ' '))).joinToString("\n") { "${it.first}\u0001${it.second}" }
                                     else { Catalog.putSource(listOf(t)); nav.openDetail(t.id) }
                                 },
-                                onMenu = if (dir != null) null else ({ Catalog.putSource(listOf(t)); nav.posterMenu(t) }),
+                                onMenu = if (dir != null || act != null) null else ({ Catalog.putSource(listOf(t)); nav.posterMenu(t) }),
                                 sub = t.oneLiner.substringAfter(" · ", "").ifEmpty { t.genres.firstOrNull().orEmpty() },
-                                badge = if (dir != null) "文件夹" else null,
+                                badge = if (dir != null) "文件夹" else if (act != null) "设置" else null,
                                 ratio = ratio,
                             )
                         }
@@ -322,9 +334,9 @@ private fun SiteItem(label: String, sub: String, on: Boolean, modifier: Modifier
     Focusable(onClick, modifier.fillMaxWidth(), corner = 8.dp, scale = 1.02f, ring = false, onFocus = onFocus) { f ->
         val fg = when { f -> Palette.Bg; on -> Palette.Douban; else -> Palette.T1 }
         Column(
-            Modifier.fillMaxWidth().height(36.dp)
+            Modifier.fillMaxWidth().heightIn(min = 36.dp)
                 .background(if (f) Color.White else if (on) Color.White.copy(alpha = 0.08f) else Color.Transparent, RoundedCornerShape(8.dp))
-                .padding(horizontal = 10.dp),
+                .padding(horizontal = 10.dp, vertical = 3.dp),
             verticalArrangement = Arrangement.Center,
         ) {
             T(label, 11.5.sp, fg, if (on || f) FontWeight.SemiBold else FontWeight.Normal)

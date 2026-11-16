@@ -22,6 +22,8 @@ class App : Application(), ImageLoaderFactory {
         if (Build.VERSION.SDK_INT >= 28 && proc != packageName) {
             runCatching { WebView.setDataDirectorySuffix(proc.substringAfter(':')) }
         }
+        if (proc.endsWith(":spider")) guardPluginCrashes()
+        dev.personal.tv.source.ConfigLoader.assets = assets
         // 片库和本地记录只在主进程用，插件进程不加载
         if (proc == packageName) {
             dev.personal.tv.data.Prefs.init(this)
@@ -35,6 +37,27 @@ class App : Application(), ImageLoaderFactory {
             Sources.init(this)
             dev.personal.tv.source.Live.init(this)
             dev.personal.tv.data.SearchIndex.init(this)
+        }
+    }
+
+    /**
+     * 插件进程里第三方 jar 的未捕获异常（后台线程里拿不到权限、没有 Activity 还要弹框…）不再带走整个进程：
+     * 后台线程的记一笔、让那个线程结束；主线程的接住后继续跑消息循环。插件自己 killProcess 的照样会死。
+     */
+    private fun guardPluginCrashes() {
+        val tag = "PluginCrash"
+        val main = android.os.Looper.getMainLooper().thread
+        val fallback = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            if (t === main) fallback?.uncaughtException(t, e)
+            else android.util.Log.w(tag, "插件线程 ${t.name} 崩了，进程留着", e)
+        }
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            while (true) {
+                try { android.os.Looper.loop() } catch (e: Throwable) {
+                    android.util.Log.w(tag, "插件在主线程抛了异常，接住继续", e)
+                }
+            }
         }
     }
 

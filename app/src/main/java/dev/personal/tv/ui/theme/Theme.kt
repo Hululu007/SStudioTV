@@ -75,7 +75,8 @@ fun AppTheme(content: @Composable () -> Unit) = TvScale {
 fun TvScale(content: @Composable () -> Unit) {
     val conf = LocalConfiguration.current
     val real = LocalContext.current.resources.displayMetrics.density
-    val font = LocalDensity.current.fontScale
+    // 字号：系统字号 × 设置里的「文字大小」
+    val font = LocalDensity.current.fontScale * dev.personal.tv.data.Prefs.textScale
     val d = remember(conf.screenWidthDp, conf.screenHeightDp, real, font) {
         val w = conf.screenWidthDp * real
         val h = conf.screenHeightDp * real

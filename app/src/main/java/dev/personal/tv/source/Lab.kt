@@ -239,6 +239,11 @@ suspend fun Lab.dump(ctx: Context, cfgUrl: String, key: String) = kotlinx.corout
     val s = c.sites.first { it.key == key.substringBefore('@') || it.api == key.substringBefore('@') }
     val api = Sites.get(ctx, c, s)
     val home = api.home()
+    (api as? JarSite)?.let { j ->
+        Log.i("Dump", "RAW home ${runCatching { j.raw("home") }.getOrElse { it.message }?.take(3000)}")
+        System.getProperty("dump.action")?.let { a -> Log.i("Dump", "RAW action $a → ${runCatching { j.raw("action", a) }.getOrElse { it.message }?.take(3000)}") }
+        if (cls.isNotEmpty()) Log.i("Dump", "RAW cat ${runCatching { j.raw("category", cls, "1") }.getOrElse { it.message }?.take(3000)}")
+    }
     Log.i("Dump", "classes ${home.classes.joinToString { it.id + ":" + it.name }} · ratio=${home.ratio}")
     val list = if (cls.isNotEmpty()) api.category(cls, 1).list else home.list.ifEmpty { home.classes.firstOrNull()?.let { api.category(it.id, 1).list }.orEmpty() }
     for (v in list) {

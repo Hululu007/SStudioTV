@@ -90,7 +90,7 @@ fun HomeScreen(mem: FocusMemory) {
     val cw = Store.continueWatching()
     val hot = Catalog.hot().filter { it.id !in Store.progress }.take(14)
     /** 热门海报宽度，跟设置里的「海报大小」 */
-    val hotW = listOf(64.dp, 75.dp, 90.dp)[dev.personal.tv.data.Prefs.posterSize]
+    val hotW = 75.dp * dev.personal.tv.data.Prefs.posterScale
 
     var focusedId by rememberSaveable { mutableStateOf<String?>(null) }
     val focused = (focusedId ?: cw.firstOrNull()?.first?.id ?: hot.firstOrNull()?.id)?.let { Catalog.get(it) }

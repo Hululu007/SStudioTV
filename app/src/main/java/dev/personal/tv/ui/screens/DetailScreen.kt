@@ -1,5 +1,6 @@
 package dev.personal.tv.ui.screens
 
+import androidx.compose.ui.layout.onSizeChanged
 import dev.personal.tv.data.Resume
 import dev.personal.tv.data.Target
 import androidx.activity.compose.BackHandler
@@ -155,11 +156,15 @@ fun DetailScreen(r: Route.Detail) {
             silhouette = false, alignment = Alignment.Center,
         )
 
+        // 字放大以后简介、按钮变高：分集那一行跟在按钮下面，不压上去
+        var infoH by remember { mutableIntStateOf(0) }
+        val epTop = maxOf(395.dp, with(LocalDensity.current) { infoH.toDp() } + 58.dp)
         NoScroll {
             Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
                 // ---------------- 第一屏 ----------------
                 Box(
-                    Modifier.fillMaxWidth().height(pageH)
+                    // 字很大时第一屏放不下分集和底下的提示，跟着长高
+                    Modifier.fillMaxWidth().height(maxOf(pageH, epTop + 125.dp))
                         .onFocusChanged { if (it.hasFocus) scope.launch { scroll.animateScrollTo(0) } },
                 ) {
                     Box(
@@ -174,7 +179,7 @@ fun DetailScreen(r: Route.Detail) {
                             .shadow(24.dp, RoundedCornerShape(10.dp)),
                         bottomPadding = 24.dp,
                     )
-                    Column(Modifier.padding(start = Dimens.SafeH, top = 46.dp).width(610.dp)) {
+                    Column(Modifier.padding(start = Dimens.SafeH, top = 46.dp).width(610.dp).onSizeChanged { infoH = it.height }) {
                         DisplayTitle(t.name, 48.sp, spacing = 0.08f)
                         T(
                             listOf(t.origName, if (t.year > 0) "${t.year}" else "", t.region).filter { it.isNotEmpty() }.joinToString(" · "),
@@ -198,7 +203,7 @@ fun DetailScreen(r: Route.Detail) {
                     if (hasEpisodes(t, ref)) {
                         val ranking = Lines.get(t.id)?.ranking
                         val versions = remember(ranking, t.id) { Lines.versions(Lines.get(t.id), t.name) }
-                        EpisodeRow(t, p, ref, epReq, mem, Modifier.padding(top = 395.dp).onFocusChanged { epFocus = it.hasFocus }, versions = versions) { ep, name -> nav.play(t.id, ep, name) }
+                        EpisodeRow(t, p, ref, epReq, mem, Modifier.padding(top = epTop).onFocusChanged { epFocus = it.hasFocus }, versions = versions) { ep, name -> nav.play(t.id, ep, name) }
                     }
                     Row(
                         Modifier.align(Alignment.BottomStart).padding(start = Dimens.SafeH, bottom = 18.dp),

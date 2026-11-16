@@ -1,5 +1,6 @@
 package dev.personal.tv.ui.screens
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -151,7 +152,7 @@ fun SourcesScreen() {
                         },
                     ) { f ->
                         Row(
-                            Modifier.fillMaxWidth().height(50.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp),
+                            Modifier.fillMaxWidth().heightIn(min = 50.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp, vertical = 3.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
@@ -173,7 +174,7 @@ fun SourcesScreen() {
                         corner = 9.dp, scale = 1.02f, ring = false,
                     ) { f ->
                         Row(
-                            Modifier.fillMaxWidth().height(50.dp)
+                            Modifier.fillMaxWidth().heightIn(min = 50.dp)
                                 .background(if (f) Color.White else Palette.Ghost6).padding(horizontal = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -207,7 +208,7 @@ fun SourcesScreen() {
                         corner = 9.dp, scale = 1.02f, ring = false,
                     ) { f ->
                         Row(
-                            Modifier.fillMaxWidth().height(44.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp),
+                            Modifier.fillMaxWidth().heightIn(min = 44.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp, vertical = 3.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
@@ -225,7 +226,7 @@ fun SourcesScreen() {
                         corner = 9.dp, scale = 1.02f, ring = false,
                     ) { f ->
                         Row(
-                            Modifier.fillMaxWidth().height(44.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp),
+                            Modifier.fillMaxWidth().heightIn(min = 44.dp).background(if (f) Color.White else Color.Transparent).padding(horizontal = 12.dp, vertical = 3.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {

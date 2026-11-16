@@ -132,7 +132,7 @@ fun Dot() = T("·", 12.sp, Palette.T3, modifier = Modifier.padding(horizontal = 
 @Composable
 fun DoubanTag(height: Dp = 15.dp, fontSize: TextUnit = 9.sp) {
     Box(
-        Modifier.height(height).background(Palette.Douban, RoundedCornerShape(3.dp)).padding(horizontal = 4.dp),
+        Modifier.heightIn(min = height).background(Palette.Douban, RoundedCornerShape(3.dp)).padding(horizontal = 4.dp, vertical = 1.dp),
         contentAlignment = Alignment.Center,
     ) { T("豆瓣", fontSize, Color.White, FontWeight.Bold, spacing = 0.04.em) }
 }
@@ -163,7 +163,7 @@ fun Score(t: Title, size: TextUnit, star: Boolean = false) {
 @Composable
 fun KeyCap(key: String) {
     Box(
-        Modifier.defaultMinSize(minWidth = 17.dp).height(15.dp)
+        Modifier.defaultMinSize(minWidth = 17.dp, minHeight = 15.dp)
             .border(0.75.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(3.5.dp))
             .padding(horizontal = 4.dp),
         contentAlignment = Alignment.Center,
@@ -316,7 +316,7 @@ fun Chip(
         val bg = when { f -> Color.White; selected -> selectedBg; else -> idleBg }
         val fg = when { f -> Palette.Bg; selected -> selectedFg; else -> Palette.T2 }
         Row(
-            Modifier.height(height).background(bg).padding(horizontal = height * 0.45f),
+            Modifier.heightIn(min = height).background(bg).padding(horizontal = height * 0.45f, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             T(text, size, fg, if (selected || f) FontWeight.SemiBold else FontWeight.Normal)

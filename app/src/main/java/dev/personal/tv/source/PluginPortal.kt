@@ -43,11 +43,17 @@ object PluginPortal {
         Base(local, Remote.lanIp()?.let { "http://$it:$port$path" })
     } }
 
-    /** 插件自带的「设置中心」站点（摸鱼儿的 csp_FishConfig 之类）：网盘登录在它的分类里，点了插件自己弹对话框 */
+    /**
+     * 插件自带的「设置中心」站点：网盘登录在它的分类里，点了插件自己弹对话框。
+     * 摸鱼儿点条目（detailContent）触发；肥猫、饭太硬的新版条目带 action，调插件 action(…)。
+     */
     class Settings(val jar: String, val md5: String?, val site: SiteCfg)
 
     fun settings(config: TvConfig): Settings? {
-        val site = config.sites.firstOrNull { it.kind == SiteKind.JAR && (it.api.endsWith("Config") || "设置" in it.name || "配置中心" in it.name) }
+        val jars = config.sites.filter { it.kind == SiteKind.JAR }
+        // 摸鱼儿 csp_FishConfig「设置中心」、肥猫 csp_Config、饭太硬 csp_MyDriveGuard「我的云盘┃配置」
+        val site = jars.firstOrNull { it.api.removeSuffix("Guard").endsWith("Config") }
+            ?: jars.firstOrNull { "MyDrive" in it.api || listOf("设置", "配置", "登录", "登入").any { w -> w in it.name } }
             ?: return null
         val jar = site.jar ?: config.spider ?: return null
         return Settings(jar, if (site.jar == null) config.spiderMd5 else null, site)

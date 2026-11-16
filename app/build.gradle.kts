@@ -15,8 +15,8 @@ android {
         applicationId = "com.sstudio.piandan"
         minSdk = 23
         targetSdk = 35
-        versionCode = 24
-        versionName = "0.9.3"
+        versionCode = 25
+        versionName = "0.9.4"
         resValue("string", "app_name", "SStudioTV")
     }
 

@@ -82,7 +82,12 @@ fun PhoneTheme(content: @Composable () -> Unit) {
             outline = Color.White.copy(alpha = 0.2f), outlineVariant = PC.Line,
         ),
     ) {
-        Surface(Modifier.fillMaxSize(), color = PC.Bg, contentColor = Palette.T1) { content() }
+        // 字号：系统字号 × 设置里的「文字大小」
+        val d = androidx.compose.ui.platform.LocalDensity.current
+        val font = d.fontScale * dev.personal.tv.data.Prefs.textScale
+        androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(d.density, font)) {
+            Surface(Modifier.fillMaxSize(), color = PC.Bg, contentColor = Palette.T1) { content() }
+        }
     }
 }
 

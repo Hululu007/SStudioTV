@@ -54,8 +54,8 @@ import dev.personal.tv.ui.screens.resumeTarget
 import dev.personal.tv.ui.theme.Palette
 import kotlinx.coroutines.launch
 
-/** 海报网格的列：按屏幕宽度自动排，手机竖屏 3 列 */
-val PosterCols = GridCells.Adaptive(minSize = 104.dp)
+/** 海报网格的列：按屏幕宽度自动排，手机竖屏 3 列；跟设置里的「海报大小」 */
+val PosterCols get() = GridCells.Adaptive(minSize = 104.dp * dev.personal.tv.data.Prefs.posterScale)
 
 /** 网格里占满一整行的条目（标题、横滑的一排） */
 fun LazyGridScope.full(key: Any, content: @Composable () -> Unit) =
