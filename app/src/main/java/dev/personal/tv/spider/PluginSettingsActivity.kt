@@ -117,6 +117,10 @@ class PluginSettingsActivity : ComponentActivity() {
         return listOfNotNull(a?.s("title"), a?.s("msg") ?: a?.s("tip"), o.s("msg")).distinct().joinToString("\n")
     }
 
+    // 插件设置页在前台时放行插件的 Toast（登录成功、已清除…），其它时候插件进程里的 Toast 都静音（见 QuietToasts）
+    override fun onResume() { super.onResume(); QuietToasts.allow = true }
+    override fun onPause() { QuietToasts.allow = false; super.onPause() }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) focusTick++

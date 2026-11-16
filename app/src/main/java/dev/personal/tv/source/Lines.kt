@@ -249,29 +249,40 @@ object Lines {
                 return
             }
         }
-        val sites = cfg.sites.filter {
+        val usable = cfg.sites.filter {
             it.searchable && it.kind.supported && it.key !in Prefs.blocked && (it.notVideo == null || Prefs.rank(it.key) != null) &&
                 it.key != origin?.first?.key
         }
+        // 先搜当前片源；其它片源的采集站只在值得的时候补搜（见 [needMore]），而且只留比当前片源好的线路（[worth]）
+        val (cross, sites) = usable.partition { CrossSources.isCross(it) }
         set.total = sites.size + (if (origin != null) 1 else 0)
         val q = Match.query(t.name)
         Log.i(TAG, "${t.name} → 「$q」· ${sites.size} 个站点")
-        // 插件站同时 8 个（插件进程扛不住更多）；采集站只是 HTTP 请求，同时 16 个（跨片源搜索时有几十个）
+        // 插件站同时 8 个（插件进程扛不住更多）；采集站只是 HTTP 请求，同时 16 个
         val sem = Semaphore(8)
         val cmsSem = Semaphore(16)
-        withTimeoutOrNull(45_000) {
-            coroutineScope {
-                sites.forEach { s ->
-                    launch {
-                        (if (s.kind == SiteKind.JAR) sem else cmsSem).withPermit {
-                            playing.first { it == 0 }
-                            one(ctx, cfg, s, t, q, set)
-                        }
-                        set.doneSites += s.key
-                        set.searched++
+        suspend fun run(list: List<SiteCfg>, accept: (PlayLine) -> Boolean) = coroutineScope {
+            list.forEach { s ->
+                launch {
+                    (if (s.kind == SiteKind.JAR) sem else cmsSem).withPermit {
+                        playing.first { it == 0 }
+                        one(ctx, cfg, s, t, q, set, accept)
                     }
+                    set.doneSites += s.key
+                    set.searched++
                 }
             }
+        }
+        coroutineScope {
+            val own = launch { withTimeoutOrNull(45_000) { run(sites) { true } } }
+            if (cross.isEmpty()) return@coroutineScope
+            // 当前片源搜完再判断；20 秒了还一条能播的都没有，就不等了，直接去补搜
+            withTimeoutOrNull(20_000) { own.join() }
+            if (own.isActive && baseLines(set).isNotEmpty()) own.join()
+            val why = needMore(t, set) ?: return@coroutineScope
+            Log.i(TAG, "${t.name} · 补搜其它片源 ${cross.size} 站：$why")
+            set.total += cross.size
+            withTimeoutOrNull(30_000) { run(cross) { worth(t, set, it) } }
         }
         if (set.lines.isEmpty() && originErr != null) set.error = "「${SourceSearch.siteLabel(origin!!.first.name)}」打不开这部：$originErr"
         // 一条都没搜到、又是网络的问题：说网络不通，别说「站点里都没有」；有 error 下次进来马上重搜
@@ -329,7 +340,54 @@ object Lines {
         return Match.query(o).takeIf { it.isNotBlank() && !it.equals(q, ignoreCase = true) }
     }
 
-    private suspend fun one(ctx: Context, cfg: TvConfig, s: SiteCfg, t: Title, q: String, set: LineSet) {
+    // ---------------------------------------------------------------- 跨片源补搜
+
+    /** 当前片源（不算跨源来的）能播的线路：没登录的网盘、播放失败过的不算 */
+    private fun baseLines(set: LineSet) = set.lines.filter { !it.siteKey.startsWith("x:") && !panLocked(it.flag) && it.key !in set.failed }
+
+    private fun epCount(l: PlayLine, t: Title) = if (t.isVariety) l.episodes.size else l.episodes.count { Eps.isNumber(it.name, t.name) }
+
+    private val LOW_Q = Regex("HDTC|HDTS|抢先|枪版|(?<![A-Za-z])(TC|TS|CAM)(?![A-Za-z])", RegexOption.IGNORE_CASE)
+    private val Q4K = Regex("4K|2160|蓝光|原画|杜比|HDR", RegexOption.IGNORE_CASE)
+    private val Q1080 = Regex("1080|超清|FHD|(?<![A-Za-z])BD(?![A-Za-z])", RegexOption.IGNORE_CASE)
+
+    /** 画质（看线路名、备注、片名里的标记）：0 抢先/枪版，1 普通，2 1080，3 4K/蓝光 */
+    internal fun quality(l: PlayLine): Int {
+        val s = "${l.flag} ${l.remarks} ${l.vodName}"
+        return when {
+            LOW_Q.containsMatchIn(s) -> 0
+            Q4K.containsMatchIn(s) -> 3
+            Q1080.containsMatchIn(s) -> 2
+            else -> 1
+        }
+    }
+
+    /**
+     * 要不要去其它片源补搜，要的话返回原因：当前片源没有能播的；集数比豆瓣少；还在更新（别的片源可能已经有下一集）；
+     * 电影没有 1080 以上的；只有抢先、枪版。都不是就不搜——同一批采集站常常在好几个配置里，搜了也是重复的。
+     */
+    internal fun needMore(t: Title, set: LineSet): String? {
+        val base = baseLines(set)
+        if (base.isEmpty()) return "当前片源没有能直接播的线路"
+        val q = base.maxOf { quality(it) }
+        if (q == 0) return "当前片源只有抢先版"
+        if (t.isEpisodic) {
+            val have = base.maxOf { epCount(it, t) }
+            if (!t.isVariety && t.airedEps > have) return "当前片源只到第 $have 集，已经播到 ${t.airedEps} 集"
+            if (t.airing) return "还在更新，别的片源可能更新得快"
+        } else if (q < 2) return "当前片源没有 1080 以上的"
+        return null
+    }
+
+    /** 补搜到的线路值不值得加进来：当前片源没有能播的、集数更多、画质更好，才加 */
+    internal fun worth(t: Title, set: LineSet, l: PlayLine): Boolean {
+        val base = baseLines(set)
+        if (base.isEmpty()) return true
+        if (quality(l) > base.maxOf { quality(it) }) return true
+        return t.isEpisodic && epCount(l, t) > base.maxOf { epCount(it, t) }
+    }
+
+    private suspend fun one(ctx: Context, cfg: TvConfig, s: SiteCfg, t: Title, q: String, set: LineSet, accept: (PlayLine) -> Boolean = { true }) {
         val alt = altQuery(t, q)
         // 插件的阻塞调用取消不了：超时就不等了，线程自己跑完
         val job = CoroutineScope(Dispatchers.IO).async {
@@ -361,12 +419,14 @@ object Lines {
                 }
             }
         }
+        var added = false
         for ((line, info) in built) {
-            if (set.lines.none { it.key == line.key }) {
+            if (set.lines.none { it.key == line.key } && accept(line)) {
+                added = true
                 set.infos[line.key] = info
                 set.lines.add(line)
             }
         }
-        if (built.isNotEmpty()) rerank(set)
+        if (added) rerank(set)
     }
 }

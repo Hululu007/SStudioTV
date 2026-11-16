@@ -95,8 +95,8 @@ fun SettingsScreen() {
                 onClick = { nav.openPans() },
             ) { fg -> T("›", 16.sp, fg) }
             if (Sources.list.size > 1) Row(
-                "跨片源搜索",
-                "搜片、找线路时把其它片源里的采集站也一起搜" + (sites?.count { dev.personal.tv.source.CrossSources.isCross(it) }?.takeIf { it > 0 }?.let { " · 多 $it 个站" } ?: ""),
+                "跨片源补搜",
+                "当前片源没有、集数落后、画质差时，去其它片源的采集站补搜" + (sites?.count { dev.personal.tv.source.CrossSources.isCross(it) }?.takeIf { it > 0 }?.let { " · $it 个站" } ?: ""),
                 Modifier.remembered(mem, "searchAll"), onClick = { Prefs.searchAll = !Prefs.searchAll },
             ) { fg -> Toggle(Prefs.searchAll, onLight = fg == Palette.Bg) }
             Section("播放")

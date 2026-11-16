@@ -128,8 +128,8 @@ fun PhoneMine(header: Boolean = true) {
                     Divider()
                     val n = sites?.count { dev.personal.tv.source.CrossSources.isCross(it) } ?: 0
                     SettingRow(
-                        "跨片源搜索",
-                        "搜片、找线路时把其它片源里的采集站也一起搜" + (if (n > 0) " · 多 $n 个站" else ""),
+                        "跨片源补搜",
+                        "当前片源没有、集数落后、画质差时，去其它片源的采集站补搜" + (if (n > 0) " · $n 个站" else ""),
                         onClick = { Prefs.searchAll = !Prefs.searchAll },
                     ) { PhoneSwitch(Prefs.searchAll) { Prefs.searchAll = it } }
                 }

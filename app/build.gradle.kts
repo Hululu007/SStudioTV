@@ -15,8 +15,8 @@ android {
         applicationId = "com.sstudio.piandan"
         minSdk = 23
         targetSdk = 35
-        versionCode = 26
-        versionName = "0.9.5"
+        versionCode = 27
+        versionName = "0.9.6"
         resValue("string", "app_name", "SStudioTV")
     }
 
@@ -78,6 +78,8 @@ dependencies {
 
     // 片源：插件（spider jar）直接调用宿主的 okhttp3 / gson，类名不能混淆
     implementation(libs.okhttp)
+    // 插件进程里静音插件的 Toast（要改 Toast 的隐藏字段，Android 9+ 默认不让）
+    implementation(libs.hiddenapibypass)
     implementation(libs.gson)
     implementation(libs.nanohttpd)
     implementation(libs.zxing.core) // 片源页的二维码

@@ -32,19 +32,22 @@ object SourceSearch {
      */
     suspend fun search(ctx: Context, q: String, douban: List<Title>, onUpdate: (List<Title>, Int, Int) -> Unit) {
         val cfg = runCatching { Sources.searchConfig() }.getOrElse { onUpdate(emptyList(), 0, 0); return }
-        val sites = cfg.sites.filter {
+        val usable = cfg.sites.filter {
             it.searchable && it.kind.supported && it.key !in Prefs.blocked && (it.notVideo == null || Prefs.rank(it.key) != null)
         }
+        // 先只搜当前片源；当前片源和豆瓣都没有，才去其它片源的采集站补搜（见 CrossSources）
+        val (cross, sites) = usable.partition { CrossSources.isCross(it) }
         val want = Match.norm(q)
         val groups = LinkedHashMap<String, MutableList<Pair<SiteCfg, Vod>>>()
         var searched = 0
-        onUpdate(emptyList(), 0, sites.size)
+        var total = sites.size
+        onUpdate(emptyList(), 0, total)
         val app = ctx.applicationContext
         val sem = Semaphore(8)
         val cmsSem = Semaphore(16)
-        withTimeoutOrNull(25_000) {
+        suspend fun run(list: List<SiteCfg>) = withTimeoutOrNull(25_000) {
             coroutineScope {
-                sites.forEach { s ->
+                list.forEach { s ->
                     launch {
                         val vods = (if (s.kind == SiteKind.JAR) sem else cmsSem).withPermit {
                             // 插件的阻塞调用取消不了：超时就不等了，线程自己跑完
@@ -57,13 +60,19 @@ object SourceSearch {
                             groups.getOrPut(groupKey(v)) { ArrayList() } += s to v
                         }
                         searched++
-                        onUpdate(build(groups), searched, sites.size)
+                        onUpdate(build(groups), searched, total)
                     }
                 }
             }
         }
-        Log.i(TAG, "「$q」· ${groups.size} 部 · $searched/${sites.size} 站")
-        onUpdate(build(groups), searched, sites.size)
+        run(sites)
+        if (groups.isEmpty() && douban.isEmpty() && cross.isNotEmpty()) {
+            Log.i(TAG, "「$q」当前片源没有，补搜其它片源 ${cross.size} 站")
+            total += cross.size
+            run(cross)
+        }
+        Log.i(TAG, "「$q」· ${groups.size} 部 · $searched/$total 站")
+        onUpdate(build(groups), searched, total)
     }
 
     /**
