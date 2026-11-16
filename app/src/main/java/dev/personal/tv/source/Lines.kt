@@ -222,7 +222,7 @@ object Lines {
     private suspend fun search(ctx: Context, title: Title, set: LineSet) {
         var t = title
         val t0 = System.currentTimeMillis()
-        val cfg = try { Sources.config() } catch (e: Throwable) {
+        val cfg = try { Sources.searchConfig() } catch (e: Throwable) {
             Log.w(TAG, "config", e)
             set.error = "片源配置加载失败：${e.message?.take(60)}"
             set.done = true
@@ -256,12 +256,14 @@ object Lines {
         set.total = sites.size + (if (origin != null) 1 else 0)
         val q = Match.query(t.name)
         Log.i(TAG, "${t.name} → 「$q」· ${sites.size} 个站点")
+        // 插件站同时 8 个（插件进程扛不住更多）；采集站只是 HTTP 请求，同时 16 个（跨片源搜索时有几十个）
         val sem = Semaphore(8)
+        val cmsSem = Semaphore(16)
         withTimeoutOrNull(45_000) {
             coroutineScope {
                 sites.forEach { s ->
                     launch {
-                        sem.withPermit {
+                        (if (s.kind == SiteKind.JAR) sem else cmsSem).withPermit {
                             playing.first { it == 0 }
                             one(ctx, cfg, s, t, q, set)
                         }
@@ -320,11 +322,23 @@ object Lines {
         return Result.success(v)
     }
 
+    /** 原名是拉丁字母的（英文片名）才拿去补搜；韩文、日文原名站点多半不收，白搜 */
+    private fun altQuery(t: Title, q: String): String? {
+        val o = t.origName.trim()
+        if (o.length < 2 || o.count { it.code < 128 } < o.length * 0.8) return null
+        return Match.query(o).takeIf { it.isNotBlank() && !it.equals(q, ignoreCase = true) }
+    }
+
     private suspend fun one(ctx: Context, cfg: TvConfig, s: SiteCfg, t: Title, q: String, set: LineSet) {
+        val alt = altQuery(t, q)
         // 插件的阻塞调用取消不了：超时就不等了，线程自己跑完
         val job = CoroutineScope(Dispatchers.IO).async {
             val api = Sites.get(ctx, cfg, s)
-            val hits = api.search(q).filter { Match.same(t.name, t.year, !t.isEpisodic, it.name, it.year) }.take(2)
+            fun ok(v: Vod) = Match.same(t.name, t.year, !t.isEpisodic, v.name, v.year) ||
+                (alt != null && Match.same(t.origName, t.year, !t.isEpisodic, v.name, v.year))
+            var hits = api.search(q).filter(::ok).take(2)
+            // 中文名搜不到、原名是英文的（很多站只收英文名，比如 UNSEEN）：拿原名再搜一次
+            if (hits.isEmpty() && alt != null) hits = api.search(alt).filter(::ok).take(2)
             hits.mapNotNull { v -> if (v.flags.isNotEmpty()) v else runCatching { api.detail(v.id) }.getOrNull() }
         }
         val vods = try {

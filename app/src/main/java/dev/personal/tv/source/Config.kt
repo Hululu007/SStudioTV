@@ -90,10 +90,24 @@ object ConfigLoader {
 
     /** 包里自带的配置文件（asset://名字），只有自己测的包里有；App 启动时设上 */
     var assets: android.content.res.AssetManager? = null
+    /** 包里自带配置的本地副本（files/configs/）：升级成不带预置的包以后，已经加过的片源还能用 */
+    var dir: java.io.File? = null
+
+    fun assetCopy(name: String) = dir?.let { java.io.File(it, "configs/" + name.replace('/', '_')) }
+
+    /** 把包里的 [name] 存一份到本地（内容变了才写） */
+    fun keepAsset(name: String) = runCatching {
+        val t = (assets ?: return@runCatching).open(name).bufferedReader().use { it.readText() }
+        val f = assetCopy(name) ?: return@runCatching
+        if (!f.exists() || f.readText() != t) { f.parentFile?.mkdirs(); f.writeText(t) }
+    }
 
     fun load(url: String): TvConfig {
         val raw = if (url.startsWith("asset://")) {
-            (assets ?: error("asset 不可用")).open(url.removePrefix("asset://")).bufferedReader().use { it.readText() }
+            val name = url.removePrefix("asset://")
+            runCatching { (assets ?: error("asset 不可用")).open(name).bufferedReader().use { it.readText() } }.getOrElse {
+                assetCopy(name)?.takeIf { it.exists() }?.readText() ?: error("这个片源只在测试包里有：$name")
+            }
         } else Net.get(url, timeoutSec = 30)
         val text = decode(raw)
         return parse(url, text)

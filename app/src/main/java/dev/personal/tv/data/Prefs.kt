@@ -28,6 +28,12 @@ object Prefs {
         get() = _precache
         set(v) { _precache = v; sp?.edit()?.putBoolean("precache", v)?.apply() }
 
+    private var _searchAll by mutableStateOf(true)
+    /** 搜片、找线路时把其它片源里的采集站也一起搜（[dev.personal.tv.source.CrossSources]） */
+    var searchAll: Boolean
+        get() = _searchAll
+        set(v) { _searchAll = v; sp?.edit()?.putBoolean("searchAll", v)?.apply() }
+
     private var _dlMetered by mutableStateOf(false)
     /** 离线下载用手机流量也下（默认只用 Wi‑Fi） */
     var dlMetered: Boolean
@@ -47,6 +53,8 @@ object Prefs {
     var posterScale: Float
         get() = _posterScale
         set(v) { _posterScale = snap(v, POSTER_RANGE); sp?.edit()?.putFloat(key("poster"), _posterScale)?.apply() }
+    /** 只改内存里的值、不写盘（插件进程用主界面带过来的字号） */
+    fun useTextScale(v: Float) { _textScale = v.coerceIn(TEXT_RANGE) }
     val textDefault get() = if (phone) 1f else TV_TEXT
     val posterDefault get() = if (phone) 1f else TV_POSTER
     /** 网格列数：[base] 是原来（倍数 1）的列数，海报放大就少几列 */
@@ -93,6 +101,7 @@ object Prefs {
         _autoLine = p.getBoolean("autoLine", true)
         _precache = p.getBoolean("precache", true)
         _dlMetered = p.getBoolean("dlMetered", false)
+        _searchAll = p.getBoolean("searchAll", true)
         phone = dev.personal.tv.ui.phone.UiMode.phone(ctx)
         // 老版本的三档海报大小（小 / 中 / 大）折算成倍数
         val oldPoster = p.getInt("posterSize", -1).takeIf { it >= 0 && !phone }?.let { listOf(0.85f, TV_POSTER, 1.5f)[it.coerceIn(0, 2)] }

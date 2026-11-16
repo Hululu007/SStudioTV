@@ -59,6 +59,8 @@ object Sources {
         }.getOrNull()
         val seen = prefs.getStringSet("presetsSeen", null)?.toMutableSet() ?: list.map { it.url }.toMutableSet()
         presets?.forEach { e -> if (seen.add(e.url) && list.none { it.url == e.url }) list += e }
+        // 包里自带的配置存一份到本地：以后装了不带预置的包（自动更新），这些片源照样能加载
+        presets?.filter { it.url.startsWith("asset://") }?.forEach { ConfigLoader.keepAsset(it.url.removePrefix("asset://")) }
         prefs.edit().putStringSet("presetsSeen", seen).apply()
         save()
     }
@@ -67,6 +69,9 @@ object Sources {
         val u = url ?: error("还没有片源：到「设置 → 片源」里添加一个影视仓配置地址")
         cfg?.takeIf { it.url == u } ?: withContext(Dispatchers.IO) { ConfigLoader.load(u) }.also { cfg = it }
     }
+
+    /** 搜索、找线路、播放用：当前片源 + 其它片源里的采集站（设置里能关） */
+    suspend fun searchConfig(): TvConfig = CrossSources.merge(config())
 
     fun select(e: Entry) {
         if (url == e.url) return

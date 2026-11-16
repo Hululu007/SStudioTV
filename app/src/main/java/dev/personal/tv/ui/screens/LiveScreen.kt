@@ -155,7 +155,8 @@ fun LiveScreen(mem: FocusMemory) {
                             corner = 10.dp, scale = 1.05f,
                         ) { f ->
                             Column(
-                                Modifier.fillMaxWidth().heightIn(min = 64.dp)
+                                // 同一行的卡片一样高：高度跟字号走（默认字号下是原来的 64dp）
+                                Modifier.fillMaxWidth().height(64.dp * maxOf(1f, androidx.compose.ui.platform.LocalDensity.current.fontScale / 1.25f))
                                     .background(if (c.name == Live.lastChannel) Palette.Ghost else Palette.Ghost6)
                                     .padding(horizontal = 12.dp, vertical = 10.dp),
                                 verticalArrangement = Arrangement.SpaceBetween,

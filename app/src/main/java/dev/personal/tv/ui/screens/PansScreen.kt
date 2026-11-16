@@ -345,7 +345,7 @@ private fun PanRow(
         ) {
             Column(Modifier.weight(1f)) {
                 T(title, 12.5.sp, fg, FontWeight.SemiBold)
-                T(sub, 9.sp, if (f) Palette.Bg.copy(alpha = 0.6f) else Palette.T3)
+                T(sub, 9.sp, if (f) Palette.Bg.copy(alpha = 0.6f) else Palette.T3, lines = 2)
             }
             Box(contentAlignment = Alignment.CenterEnd) { trailing(fg) }
         }

@@ -233,7 +233,7 @@ object Downloads {
             pending[i] = Item(it.id, it.meta, null, "正在解析地址…")
             val m = it.meta
             val r = runCatching {
-                val c = Sources.config()
+                val c = Sources.searchConfig()
                 withTimeoutOrNull(60_000) { PlaySession.resolveInfo(app, c, m.siteKey, m.flag, m.epUrl) }
             }
             val info = r.getOrNull()

@@ -6,6 +6,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.Key
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
@@ -64,10 +65,10 @@ fun SettingsScreen() {
     val first = remember { FocusRequester() }
     var sites by remember { mutableStateOf<List<SiteCfg>?>(null) }
     var err by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Sources.url) {
+    LaunchedEffect(Sources.url, Prefs.searchAll) {
         if (Sources.empty) { sites = null; err = "还没有片源，先到「片源」里加一个"; return@LaunchedEffect }
         try {
-            sites = Sources.config().sites
+            sites = Sources.searchConfig().sites
             err = null
         } catch (e: Throwable) { err = "片源配置加载失败：${e.message?.take(60)}" }
     }
@@ -93,6 +94,11 @@ fun SettingsScreen() {
                 Modifier.remembered(mem, "pans"),
                 onClick = { nav.openPans() },
             ) { fg -> T("›", 16.sp, fg) }
+            if (Sources.list.size > 1) Row(
+                "跨片源搜索",
+                "搜片、找线路时把其它片源里的采集站也一起搜" + (sites?.count { dev.personal.tv.source.CrossSources.isCross(it) }?.takeIf { it > 0 }?.let { " · 多 $it 个站" } ?: ""),
+                Modifier.remembered(mem, "searchAll"), onClick = { Prefs.searchAll = !Prefs.searchAll },
+            ) { fg -> Toggle(Prefs.searchAll, onLight = fg == Palette.Bg) }
             Section("播放")
             Row("自动换线路", "解析不出、播放出错或卡住 20 秒，自动换下一条", Modifier.remembered(mem, "auto"), onClick = { Prefs.autoLine = !Prefs.autoLine }) { fg ->
                 Toggle(Prefs.autoLine, onLight = fg == Palette.Bg)
@@ -112,6 +118,17 @@ fun SettingsScreen() {
                 SearchIndex.progress?.let { "正在建索引 $it 组，建完前也能搜" } ?: "豆瓣片名，首字母搜索在这里找；每 7 天自动更新",
                 Modifier.remembered(mem, "index"), onClick = {},
             ) { }
+            Section("版本")
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            Row(
+                "检查更新", dev.personal.tv.source.Updater.status,
+                Modifier.remembered(mem, "update"), onClick = { dev.personal.tv.source.Updater.act(ctx) },
+            ) { fg -> T("›", 16.sp, fg) }
+            dev.personal.tv.source.Updater.qr?.let {
+                QrImage(it, Modifier.padding(start = 12.dp, top = 6.dp).size(140.dp))
+            }
+            // 最后一行聚焦时下面留点空，第二行字不贴着屏幕边
+            androidx.compose.foundation.layout.Spacer(Modifier.height(28.dp))
         }
 
         // ---------------- 右：线路偏好 ----------------
@@ -226,7 +243,7 @@ private fun Row(
         ) {
             Column(Modifier.weight(1f)) {
                 T(title, 12.5.sp, if (dim && !f) Palette.T3 else fg, FontWeight.SemiBold)
-                T(sub, 9.sp, if (f) Palette.Bg.copy(alpha = 0.6f) else Palette.T3)
+                T(sub, 9.sp, if (f) Palette.Bg.copy(alpha = 0.6f) else Palette.T3, lines = 2)
             }
             Box(contentAlignment = Alignment.CenterEnd) { trailing(fg) }
         }

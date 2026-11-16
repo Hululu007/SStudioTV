@@ -31,7 +31,7 @@ object SourceSearch {
      * 同时 8 个站点，单站 12 秒，整体 25 秒。[douban] 是豆瓣已经给出的结果，对得上的不重复列。
      */
     suspend fun search(ctx: Context, q: String, douban: List<Title>, onUpdate: (List<Title>, Int, Int) -> Unit) {
-        val cfg = runCatching { Sources.config() }.getOrElse { onUpdate(emptyList(), 0, 0); return }
+        val cfg = runCatching { Sources.searchConfig() }.getOrElse { onUpdate(emptyList(), 0, 0); return }
         val sites = cfg.sites.filter {
             it.searchable && it.kind.supported && it.key !in Prefs.blocked && (it.notVideo == null || Prefs.rank(it.key) != null)
         }
@@ -41,11 +41,12 @@ object SourceSearch {
         onUpdate(emptyList(), 0, sites.size)
         val app = ctx.applicationContext
         val sem = Semaphore(8)
+        val cmsSem = Semaphore(16)
         withTimeoutOrNull(25_000) {
             coroutineScope {
                 sites.forEach { s ->
                     launch {
-                        val vods = sem.withPermit {
+                        val vods = (if (s.kind == SiteKind.JAR) sem else cmsSem).withPermit {
                             // 插件的阻塞调用取消不了：超时就不等了，线程自己跑完
                             val job = CoroutineScope(Dispatchers.IO).async { Sites.get(app, cfg, s).search(q) }
                             runCatching { withTimeoutOrNull(12_000) { job.await() } }.getOrNull().orEmpty()

@@ -90,12 +90,12 @@ fun PhoneMine(header: Boolean = true) {
     val activity = currentActivity()
     var info by remember { mutableStateOf<String?>(null) }
     var sites by remember { mutableStateOf<List<SiteCfg>?>(null) }
-    LaunchedEffect(Sources.url) {
+    LaunchedEffect(Sources.url, Prefs.searchAll) {
         info = null; sites = null
         if (Sources.empty) return@LaunchedEffect
         try {
             val c = Sources.config()
-            info = summary(c); sites = c.sites
+            info = summary(c); sites = Sources.searchConfig().sites
         } catch (e: Throwable) { info = "加载失败：${e.message?.take(60)}" }
     }
     var prefsOpen by remember { mutableStateOf(false) }
@@ -124,6 +124,15 @@ fun PhoneMine(header: Boolean = true) {
                     "优先 ${Prefs.preferred.size} · 不用 ${Prefs.blocked.size} · 播放时先试「优先」的站点",
                     onClick = { if (sites != null) prefsOpen = true else nav.toast(info ?: "片源还在加载") },
                 ) { Arrow() }
+                if (Sources.list.size > 1) {
+                    Divider()
+                    val n = sites?.count { dev.personal.tv.source.CrossSources.isCross(it) } ?: 0
+                    SettingRow(
+                        "跨片源搜索",
+                        "搜片、找线路时把其它片源里的采集站也一起搜" + (if (n > 0) " · 多 $n 个站" else ""),
+                        onClick = { Prefs.searchAll = !Prefs.searchAll },
+                    ) { PhoneSwitch(Prefs.searchAll) { Prefs.searchAll = it } }
+                }
             }
         }
 
@@ -187,6 +196,11 @@ fun PhoneMine(header: Boolean = true) {
             }
         }
 
+        Group("版本")
+        Card {
+            SettingRow("检查更新", dev.personal.tv.source.Updater.status, onClick = { dev.personal.tv.source.Updater.act(ctx) }) { Tx("›", 20.sp, Palette.T3) }
+            dev.personal.tv.source.Updater.qr?.let { QrImage(it, Modifier.padding(horizontal = PC.Edge, vertical = 8.dp).size(180.dp)) }
+        }
         val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull().orEmpty() }
         Tx(
             "SStudioTV $version · 不自带片源，想看、观看记录都只存在本机",

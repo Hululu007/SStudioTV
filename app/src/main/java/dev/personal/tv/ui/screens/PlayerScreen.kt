@@ -498,7 +498,7 @@ private fun SheetRow(
                         )
                     }
                 }
-                T(sub, 9.sp, if (f) Palette.Bg.copy(alpha = 0.6f) else Palette.T3)
+                T(sub, 9.sp, if (f) Palette.Bg.copy(alpha = 0.6f) else Palette.T3, lines = 2)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) { trailing(fg) }
         }

@@ -84,9 +84,10 @@ class PluginSettingsActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 插件进程里没初始化过设置：字号要跟主界面一样
+        // 插件进程里没初始化过设置；字号由主界面打开时带过来（跨进程的 SharedPreferences 有缓存，读到的可能是旧值）
         dev.personal.tv.data.Prefs.init(applicationContext)
         val i = intent
+        i.getFloatExtra("textScale", 0f).takeIf { it > 0f }?.let { dev.personal.tv.data.Prefs.useTextScale(it) }
         val jar = i.getStringExtra("jar") ?: return finish()
         val md5 = i.getStringExtra("md5")
         val key = i.getStringExtra("key") ?: return finish()
@@ -287,7 +288,7 @@ class PluginSettingsActivity : ComponentActivity() {
             ) {
                 Column(Modifier.weight(1f)) {
                     T(title, 12.5.sp, fg, FontWeight.SemiBold)
-                    if (!sub.isNullOrBlank()) T(sub, 9.sp, if (f) Palette.Bg.copy(alpha = 0.6f) else Palette.T3)
+                    if (!sub.isNullOrBlank()) T(sub, 9.sp, if (f) Palette.Bg.copy(alpha = 0.6f) else Palette.T3, lines = 2)
                 }
                 Box(contentAlignment = Alignment.CenterEnd) { T("›", 16.sp, fg) }
             }
@@ -301,7 +302,7 @@ class PluginSettingsActivity : ComponentActivity() {
         fun open(ctx: Context, jar: String, md5: String?, site: SiteCfg, run: String? = null, cls: String? = null) {
             ctx.startActivity(
                 Intent(ctx, PluginSettingsActivity::class.java).putExtra("phone", UiMode.phone(ctx))
-                    .putExtra("run", run).putExtra("cls", cls)
+                    .putExtra("run", run).putExtra("cls", cls).putExtra("textScale", dev.personal.tv.data.Prefs.textScale)
                     .putExtra("jar", jar).putExtra("md5", md5)
                     .putExtra("key", site.key).putExtra("api", site.api).putExtra("ext", site.ext)
                     .putExtra("name", site.name.replace(Regex("[^\\p{L}\\p{N} ]"), "").trim().ifEmpty { "插件设置" })

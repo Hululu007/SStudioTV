@@ -24,6 +24,7 @@ class App : Application(), ImageLoaderFactory {
         }
         if (proc.endsWith(":spider")) guardPluginCrashes()
         dev.personal.tv.source.ConfigLoader.assets = assets
+        dev.personal.tv.source.ConfigLoader.dir = filesDir
         // 片库和本地记录只在主进程用，插件进程不加载
         if (proc == packageName) {
             dev.personal.tv.data.Prefs.init(this)
@@ -35,6 +36,8 @@ class App : Application(), ImageLoaderFactory {
             Store.init(this)
             Catalog.init(this)
             Sources.init(this)
+            dev.personal.tv.source.CrossSources.init(this)
+            dev.personal.tv.source.Updater.init(this)
             dev.personal.tv.source.Live.init(this)
             dev.personal.tv.data.SearchIndex.init(this)
         }

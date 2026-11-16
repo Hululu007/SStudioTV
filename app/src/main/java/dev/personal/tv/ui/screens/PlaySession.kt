@@ -428,7 +428,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             set.failed.remove(lc.key)
         }
         val c = cfg ?: try {
-            Sources.config().also { cfg = it }
+            Sources.searchConfig().also { cfg = it }
         } catch (e: Throwable) {
             fail = "片源配置加载失败：${e.message?.take(60)}"
             return

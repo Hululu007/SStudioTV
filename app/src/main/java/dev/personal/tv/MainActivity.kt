@@ -95,6 +95,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        dev.personal.tv.source.Updater.onResume(this)
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { SpiderClient.reclaimPort() }
     }
 

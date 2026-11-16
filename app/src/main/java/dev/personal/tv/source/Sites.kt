@@ -16,6 +16,17 @@ interface SiteApi {
 }
 
 /** 苹果 CMS JSON 接口（type 1）：?ac=list / ?ac=detail&wd= / ?ac=detail&ids= */
+/**
+ * 采集站常给两组来源：xxm3u8（直链）和 xxyun（分享页，要网页解析，多半解析不出来）。
+ * 有直链组时把要解析的组去掉，不然自动换线会在它们上面白等。
+ */
+private val DIRECT_URL = Regex("\\.(m3u8|mp4|flv|mkv)(\\?|$)", RegexOption.IGNORE_CASE)
+internal fun Vod.directFirst(): Vod {
+    fun PlayFlag.direct() = episodes.firstOrNull()?.url?.let { DIRECT_URL.containsMatchIn(it) } == true
+    if (flags.none { it.direct() } || flags.all { it.direct() }) return this
+    return copy(flags = flags.filter { it.direct() })
+}
+
 class CmsSite(private val cfg: SiteCfg) : SiteApi {
 
     private fun call(vararg q: Pair<String, String>): String {
@@ -31,8 +42,8 @@ class CmsSite(private val cfg: SiteCfg) : SiteApi {
         return VodPage(p.classes, list.ifEmpty { p.list }, p.ratio)
     }
     override fun category(tid: String, page: Int) = VodJson.page(call("ac" to "detail", "t" to tid, "pg" to "$page"))
-    override fun search(wd: String) = VodJson.page(call("ac" to "detail", "wd" to wd)).list
-    override fun detail(id: String) = VodJson.page(call("ac" to "detail", "ids" to id)).list.firstOrNull()
+    override fun search(wd: String) = VodJson.page(call("ac" to "detail", "wd" to wd)).list.map { it.directFirst() }
+    override fun detail(id: String) = VodJson.page(call("ac" to "detail", "ids" to id)).list.firstOrNull()?.directFirst()
 
     /** CMS 给的地址多数直接能播；不是 m3u8/mp4 的标记成需要解析 */
     override fun play(flag: String, id: String): PlayInfo {
@@ -60,8 +71,8 @@ class CmsXmlSite(private val cfg: SiteCfg) : SiteApi {
         return VodPage(p.classes, list.ifEmpty { p.list }, p.ratio)
     }
     override fun category(tid: String, page: Int) = call("ac" to "videolist", "t" to tid, "pg" to "$page")
-    override fun search(wd: String) = call("ac" to "videolist", "wd" to wd).list
-    override fun detail(id: String) = call("ac" to "videolist", "ids" to id).list.firstOrNull()
+    override fun search(wd: String) = call("ac" to "videolist", "wd" to wd).list.map { it.directFirst() }
+    override fun detail(id: String) = call("ac" to "videolist", "ids" to id).list.firstOrNull()?.directFirst()
     override fun play(flag: String, id: String) = json.play(flag, id)
 
     companion object {
