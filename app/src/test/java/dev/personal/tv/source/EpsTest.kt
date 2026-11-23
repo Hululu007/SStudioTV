@@ -162,4 +162,14 @@ class EpsTest {
         assertEquals("1", Eps.label("1 4KHDR 【X - 小 - 城..良--方/ 高码】", t))
         assertEquals("# 乡音一吵吵，归途", Eps.fullLabel("# 乡音一吵吵，归途", t))
     }
+
+    @Test
+    fun netdiskAudioChannels() {
+        val t = "繁花"
+        // 「AAC.2.0」「DDP5.1」和后面的压制组不是集名的一部分：S01E01 就是第 1 集
+        assertEquals(1, Eps.number("[1.27GB] (2023) 繁花.Blossoms.S01E01.2023.2160p.WEB-DL.HEVC.AAC.2.0-NHDWEB.mp4", t))
+        assertEquals(1, Eps.number("[2.1GB]繁花.S01E01.2023.4K.HDR.H265.DDP5.1.Atmos.mp4", t))
+        assertEquals(0, Eps.indexOf(eps("繁花.S01E01.2160p.mp4", "繁花.S01E02.2160p.mp4"), "[1.27GB] (2023) 繁花.Blossoms.S01E01.2023.2160p.WEB-DL.HEVC.AAC.2.0-NHDWEB.mp4", t))
+        assertEquals(5, Eps.number("第5集", t))
+    }
 }

@@ -34,7 +34,8 @@ data class EpId(
  */
 object Eps {
     private val QUALITY = Regex(
-        "(?<![a-z0-9])(?:\\d{3,4}[pi]|1?[02468]bit|[248]k(?:hdr)?(?:\\d{2,3}(?:fps|帧)?)?|\\d{2,3}(?:fps|帧)|hdr10\\+?|hdr|dolby|uhd|fhd|hd|bd|tc|ts|web-?dl|hevc|[hx]\\.?26[45]|aac)(?![a-z])" +
+        // 音轨「AAC.2.0」「DDP5.1」「Atmos」：声道数不去掉会被当成集号后面的字（S01E01 认成「120」）
+        "(?<![a-z0-9])(?:aac[\\s._-]*[1257]\\.[01](?!\\d)|(?:ddp|dd\\+|e?ac-?3|dts(?:-?(?:hd|x|ma))?|truehd|atmos|flac|opus|lpcm)(?:[\\s._-]*[1257]\\.[01](?!\\d))?|\\d{3,4}[pi]|1?[02468]bit|[248]k(?:hdr)?(?:\\d{2,3}(?:fps|帧)?)?|\\d{2,3}(?:fps|帧)|hdr10\\+?|hdr|dolby|uhd|fhd|hd|bd|tc|ts|web-?dl|hevc|[hx]\\.?26[45]|aac)(?![a-z])" +
             "|杜比视界|杜比|高清|超清|标清|蓝光|原画|高码率?|低码率?|(?:国语|粤语|英语|普通话|原声|双语)(?:版|中字)?|中英字幕|中文字幕|中字|英字|无删减|未删减|删减版|已完结|完结|大结局|最终[集回话章]?|全集" +
             "|(?<![a-z])(?:end|final)(?![a-z])",
     )
@@ -58,7 +59,7 @@ object Eps {
      * 前面不是编码的不动（「Running.Man-EP05.mp4」「20261022-PLUS.mp4」）
      */
     private val RELEASE_GROUP = Regex(
-        "(?<=(?i:aac|ac3|eac3|dts|flac|atmos|ddp?\\d\\.\\d|26[45]|hevc|avc|\\dp|-dl|rip|ray|bit))" +
+        "(?<=(?i:aac|ac3|eac3|dts|flac|atmos|ddp?\\d\\.\\d|[1257]\\.[01]|26[45]|hevc|avc|\\dp|-dl|rip|ray|bit))" +
             "-(?!(?:EP?\\d|PART|PT\\d|PLUS|LIVE|SP|END|CUT)(?![A-Z]))(?=[A-Z0-9]{2,12}\\.)[A-Z0-9]*[A-Z][A-Z0-9]*" +
             "(?=\\.(?:mp4|mkv|ts|flv|avi|mov|webm|m4v)(?![A-Za-z0-9]))",
     )

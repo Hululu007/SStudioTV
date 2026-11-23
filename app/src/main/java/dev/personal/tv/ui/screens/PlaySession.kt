@@ -312,6 +312,8 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
      */
     private fun indexIn(l: PlayLine): Int? {
         val eps = l.episodes
+        // 电影：每条线路就一个文件，名字各写各的（「BD国英双语双字修复版」↔「The.Wandering.Earth…mp4」），不用比名字
+        if (ep == 1 && eps.size == 1 && (line?.episodes?.size ?: 1) == 1) return 1
         val n = epName ?: return Eps.indexOfNumber(eps, ep, t.name).takeIf { it >= 0 }?.plus(1)
         // 选集行按名字点的、这个位置上正好是这个名字：直接用（同一条线路里有好几个「加更版」时，不能都放第一个）
         if (eps.getOrNull(ep - 1)?.name == n) return ep
