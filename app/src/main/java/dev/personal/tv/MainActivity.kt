@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
                     i.getStringExtra("open")?.let { q ->
                         lifecycleScope.launch {
                             val r = runCatching { dev.personal.tv.data.Catalog.search(q, remote = true) }.getOrDefault(emptyList())
-                            android.util.Log.i("Lab", "open「$q」→ ${r.take(5).joinToString { "${it.name}(${it.year})" }}")
+                            android.util.Log.i("Lab", "open「$q」→ ${r.withIndex().joinToString { (k, it) -> "$k ${it.name}(${it.year} ${it.kind} ${it.region})" }}")
                             r.getOrNull(i.getIntExtra("pick", 0))?.let { dev.personal.tv.ui.Navigator.current?.openDetail(it.id) }
                         }
                         return

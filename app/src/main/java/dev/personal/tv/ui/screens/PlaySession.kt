@@ -451,6 +451,8 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         }
         val c = cfg ?: try {
             Sources.searchConfig().also { cfg = it }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Throwable) {
             fail = "片源配置加载失败：${e.message?.take(60)}"
             return
@@ -503,6 +505,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
                 player.stop()
                 status = null
                 fail = "${cand.siteName} · ${cand.flag} 里没有「${epText()}」"
+                Log.i(TAG, "✗ ${cand.key} 里没有「$epName」")
                 return
             }
             ep = i
@@ -545,6 +548,9 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         pre = null
         val info = if (reuse != null) reuse.info else try {
             withTimeoutOrNull(RESOLVE_S * 1000L) { Lines.yieldTo { resolve(c, l, e) } }
+        } catch (x: kotlinx.coroutines.CancellationException) {
+            // 换线、换集时旧的这一轮被取消：不是线路的错，别记失败、别接着往下试（实测一串线路 0～1ms「解析失败」）
+            throw x
         } catch (x: Throwable) {
             Log.w(TAG, "resolve ${l.key}", x)
             val root = generateSequence(x) { it.cause }.last()

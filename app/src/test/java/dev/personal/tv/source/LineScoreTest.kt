@@ -174,4 +174,45 @@ class LineScoreTest {
         assertEquals(3, Eps.nextAfter(line, 1))
         assertEquals(3, Eps.nextAfter(line, 2))
     }
+
+    /** 综艺多数站按日期起名，两个站把上下期、加更一路编成「第1集…第n集」：号多也不能拿来显示选集 */
+    @Test fun numberedVarietyLosesToDates() {
+        val t = "后会友期"
+        val dated = eps("20261022第1期", "20261022第2期", "20261023加更版", "20261029第3期上", "20261029第3期下",
+            "20261030加更版", "20261105第4期上", "20261105第4期下", "20261112第5期上", "20261112第5期下")
+        val numbered = eps(*(1..14).map { "第${it}集" }.toTypedArray())
+        val lines = listOf("a" to numbered, "b" to numbered, "c" to dated, "d" to dated, "e" to dated.dropLast(2), "f" to dated)
+        val s = Eps.score(lines, t)
+        assertTrue(s.toString(), s[2].value > s[0].value && s[3].value > s[1].value)
+        assertTrue(best(lines, t) >= 2)
+        // 电视剧大家都按集号：不受影响
+        val drama = listOf("a" to numbered, "b" to numbered, "c" to numbered.dropLast(1), "d" to numbered)
+        assertTrue(Eps.score(drama, "繁花").all { it.bad == 0 })
+    }
+
+    @Test fun sameDayIssuesInOrder() {
+        val t = "后会友期"
+        val e = Eps.ascending(eps("20261022第2期", "20261022第1期", "20261022沉浸版第1期", "20261029第3期（下）", "20261029第3期（上）"), t)
+        assertEquals(listOf("20261022第1期", "20261022第2期", "20261022沉浸版第1期", "20261029第3期（上）", "20261029第3期（下）"), e.map { it.name })
+    }
+
+    /** 换线路时认同一期（2026-11《后会友期》换线报「里没有「10.22 第1期」」） */
+    @Test fun findSameIssueAcrossNaming() {
+        val t = "后会友期"
+        val cheese = eps("20261022 01", "20261022 02", "20261022沉浸版", "20261029上", "20261029下")
+        assertEquals(0, Eps.indexOf(cheese, "20261022第1期", t))
+        assertEquals(1, Eps.indexOf(cheese, "20261022第2期", t))
+        val kuafu = eps("2026.10.22 H _第1期", "2026.10.22 H _第2期", "2026.10.22 H _沉浸版第1期")
+        assertEquals(1, Eps.indexOf(kuafu, "20261022第2期", t))
+        val undated = eps("第1期", "沉浸版第1期", "第2期", "加更版第2期", "第3期上", "第3期下")
+        assertEquals(0, Eps.indexOf(undated, "20261022第1期", t))
+        assertEquals(2, Eps.indexOf(undated, "20261022第2期", t))
+        assertEquals(5, Eps.indexOf(undated, "20261029第3期（下）", t))
+        assertEquals(1, Eps.indexOf(undated, "20261022沉浸版第1期", t))
+        // 反过来：没日期的「第2期」在带日期的线路里
+        val dated = eps("20261022第1期", "20261022第2期", "20261022沉浸版第1期")
+        assertEquals(1, Eps.indexOf(dated, "第2期", t))
+        // 同一天两期、键一样：按期号挑，不再总是第一个
+        assertEquals(1, Eps.indexOf(dated, "第20261022期第02期", t))
+    }
 }

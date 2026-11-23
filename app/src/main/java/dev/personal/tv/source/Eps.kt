@@ -14,6 +14,8 @@ data class EpId(
     val tag: String,
     val rest: String,
     val key: String,
+    /** 带日期的那一期另写的期号（「20261022第2期」的 2）：不进 [key]（各站期号常常不统一），同一天有好几期时拿来分 */
+    val issue: String? = null,
 ) {
     /** 名字就是一个序号（「第05集」「EP5」「05 HD」）；「第3期」是综艺的期号，不算 */
     val plain get() = date == null && num != null && num.all { it.isDigit() } && unit != '期' && part == 0 && tag.isEmpty() && rest.isEmpty()
@@ -214,6 +216,7 @@ object Eps {
         var num: String? = null
         var raw: String? = null
         var unit: Char? = null
+        var issue: String? = null
         if (date == null) {
             val ms = NUM.findAll(s).filter { m ->
                 val v = m.groupValues[2]
@@ -231,7 +234,11 @@ object Eps {
             }
         } else {
             // 日期之外的期号（「第12期 20230317」）不算进键里
-            NUM.find(s)?.takeIf { it.groupValues[3].isNotEmpty() || it.groupValues[1] == "第" }?.let { s = s.replaceRange(it.range, " ") }
+            NUM.find(s)?.takeIf { it.groupValues[3].isNotEmpty() || it.groupValues[1] == "第" }?.let {
+                val v = it.groupValues[2]
+                issue = if (v[0].isDigit()) normNum(v) else cn(v)?.toString()
+                s = s.replaceRange(it.range, " ")
+            }
         }
 
         var part = 0
@@ -255,7 +262,7 @@ object Eps {
             num != null -> "$num$p$tag$rest"
             else -> "$p$tag$rest".ifEmpty { name.trim() }
         }
-        return EpId(date, num, raw, unit, part, tag, rest, key)
+        return EpId(date, num, raw, unit, part, tag, rest, key, issue)
     }
 
     /** 「01」→「1」，「05.5」→「5.5」，「01-02」→「1-2」 */
@@ -345,15 +352,37 @@ object Eps {
     fun indexOf(eps: List<Episode>, name: String, title: String = ""): Int {
         val a = parse(name, title)
         val ids = eps.map { parse(it.name, title) }
-        ids.indexOfFirst { it.key == a.key }.takeIf { it >= 0 }?.let { return it }
-        val loose = ids.withIndex().filter { (_, b) ->
+        val ai = issueOf(a)
+        // 同一天好几期（「20261022第1期」「20261022第2期」键一样）：按期号挑
+        fun pick(c: List<Int>) = if (ai == null) null else c.singleOrNull { issueOf(ids[it]) == ai }
+        val exact = ids.indices.filter { ids[it].key == a.key }
+        if (exact.isNotEmpty()) return (if (exact.size > 1) pick(exact) else null) ?: exact[0]
+        val loose = ids.indices.filter { k ->
+            val b = ids[k]
             b.part == a.part && b.tag == a.tag && when {
                 a.date != null || b.date != null -> sameDay(a, b)
                 a.num != null -> b.num == a.num
                 else -> false
             }
         }
-        return loose.singleOrNull()?.index ?: -1
+        loose.singleOrNull()?.let { return it }
+        if (loose.size > 1) pick(loose)?.let { return it }
+        // 一边写了日期、一边只写「第1期」（「10.22 第1期」↔「第1期」「沉浸版第1期」）：按期号、上下、类型认唯一的一个
+        if (ai == null || loose.isNotEmpty()) return -1
+        return ids.indices.filter { k ->
+            val b = ids[k]
+            (a.date == null) != (b.date == null) && b.part == a.part && b.tag == a.tag && issueOf(b) == ai
+        }.singleOrNull() ?: -1
+    }
+
+    /**
+     * 这一集是第几期：带日期的看另写的期号，日期后面光秃秃一两位数（「20261022 02」，当天第几期）也算；
+     * 没日期的「第3期」看号。电视剧的「第3集」不算。
+     */
+    private fun issueOf(id: EpId): String? = when {
+        id.date != null -> id.issue ?: id.rest.takeIf { it.length in 1..2 && it.all { c -> c.isDigit() } }?.trimStart('0')?.ifEmpty { null }
+        id.unit == '期' -> id.num
+        else -> null
     }
 
     /** 两个名字是不是同一集 */
@@ -453,6 +482,9 @@ object Eps {
         return s
     }
 
+    /** 日期后面的期号（解析时有日期就不留期号，排同一天的几期时要用） */
+    private val ISSUE = Regex("第\\s*(\\d{1,3})\\s*期")
+
     private val EP_HEAD = Regex("^(?:第\\s*(\\d{1,4})\\s*[集话話回]|(?:episode|ep|e)\\s*(\\d{1,4})(?!\\d))", RegexOption.IGNORE_CASE)
 
     /** 超过 [LABEL_MAX] 宽度截断 */
@@ -502,6 +534,8 @@ object Eps {
             compareBy<Int, Pair<Int, Double>?>(nullsLast(cmp)) { keys[it] }
                 .thenBy { if (raw[it] == null) 1 else 0 }
                 .thenBy { tagRank(ids[it].tag) }
+                // 同一天两期（「10.22 第2期」「10.22 第1期」）按期号排
+                .thenBy { if (ids[it].date != null) ISSUE.find(eps[it].name)?.groupValues?.get(1)?.toInt() ?: 0 else 0 }
                 .thenBy { ids[it].part },
         )
         return order.map { eps[it] }
@@ -571,6 +605,14 @@ object Eps {
         lines.forEachIndexed { i, (site, _) -> keys[i].forEach { support.getOrPut(it) { HashSet() } += site } }
         val sites = lines.map { it.first }.distinct().size
         val need = if (sites <= 2) 1 else maxOf(2, (sites * 0.15).toInt())
+        // 各站主要用哪套编号（每条线路取条数最多的那套，按站点数）。综艺多数站按日期 / 期号起名，
+        // 个别站把上下期、加更一路编成「第1集…第28集」：号多、能跟另一个这么编的站对上，分数反而高，
+        // 拿它当选集显示就全乱了（实测《后会友期》：8 个站按日期，2 个站按集号）。大多数站不按集号时，集号那套算对不上。
+        val kindSites = HashMap<Char, HashSet<String>>()
+        lines.forEachIndexed { i, (site, _) -> keys[i].groupBy { it[0] }.maxByOrNull { it.value.size }?.key?.let { kindSites.getOrPut(it) { HashSet() } += site } }
+        val nSites = kindSites['n']?.size ?: 0
+        val otherSites = kindSites.filterKeys { it != 'n' }.values.flatten().toSet().size
+        val numberedOdd = otherSites >= 3 && otherSites >= nSites * 2
         // 每条线路里每一天（每一期）有几个正片；各站一般是几个（中位数）
         val counts = ids.indices.map { i -> ids[i].filter { !it.extra }.mapNotNull { coarse(it) }.filter { it in keys[i] }.groupingBy { it }.eachCount() }
         val typical = HashMap<String, Int>()
@@ -579,10 +621,10 @@ object Eps {
             val ks = keys[i]
             // 一条线路里混着两套编号（日期 / 期号 / 集号）时，少的那套算对不上
             val kinds = ks.groupBy { it[0] }
-            val top = kinds.maxByOrNull { (k, v) -> v.count { (support[it]?.size ?: 0) >= need } * 1000 + v.size + if (k == 'd') 1 else 0 }?.key
+            val top = kinds.maxByOrNull { (k, v) -> (if (k == 'n' && numberedOdd) 0 else v.count { (support[it]?.size ?: 0) >= need } * 1000) + v.size + if (k == 'd') 1 else 0 }?.key
             var good = 0; var fresh = 0; var bad = main[i].count { it in notMain }
             for ((kind, v) in kinds) {
-                if (kind != top) { bad += v.size; continue }
+                if (kind != top || kind == 'n' && numberedOdd) { bad += v.size; continue }
                 val ok = v.filter { (support[it]?.size ?: 0) >= need }
                 // 一集都对不上别人的，没有「比别人新」可言；新出的也就最近几集，多了是别的东西
                 val newest = ok.maxOfOrNull { ord(it) } ?: Double.POSITIVE_INFINITY

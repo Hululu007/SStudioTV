@@ -430,8 +430,11 @@ object Lines {
             if (hits.isEmpty() && alt != null) hits = api.search(alt).filter(::ok).take(2)
             hits.mapNotNull { v -> if (v.flags.isNotEmpty()) v else runCatching { api.detail(v.id) }.getOrNull() }
         }
+        // 插件站头一回要先加载 jar、初始化（荐片实测 5～7 秒），8 个插件挤在一个进程里再搜索、拿详情，25 秒也常常不够。
+        // 当前片源这批总共等 45 秒、线路边搜边加，不耽误开播，插件站就等到 40 秒
+        val limit = if (s.kind == SiteKind.JAR) 40_000L else 15_000L
         val vods = try {
-            withTimeoutOrNull(15_000) { job.await() }
+            withTimeoutOrNull(limit) { job.await() } ?: run { Log.d(TAG, "${s.name}: ${limit / 1000} 秒没搜完"); null }
         } catch (e: Throwable) {
             Log.d(TAG, "${s.name}: ${e.message}")
             if (generateSequence(e) { it.cause }.take(5).any { it is java.io.IOException }) set.netErrors++
