@@ -375,8 +375,10 @@ object Store {
         }
     }
 
+    fun hideFromContinue(id: String) { progress[id]?.let { progress[id] = it.copy(hiddenFromContinue = true) } }
+
     fun continueWatching(): List<Pair<Title, Progress>> =
-        progress.values.sortedByDescending { it.lastWatched }
+        progress.values.filterNot { it.hiddenFromContinue }.sortedByDescending { it.lastWatched }
             .mapNotNull { p -> Catalog.get(p.titleId)?.let { it to p } }
 
     /** 看完了最新一集，但又出了新集：返回新出的集数 */

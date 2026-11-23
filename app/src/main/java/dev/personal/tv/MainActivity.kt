@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
                     // --es line 站名或线路 key：正在播放的换到这条线路（测换线进度）
                     i.getStringExtra("line")?.let { q ->
                         val ps = dev.personal.tv.ui.screens.PlaySession.current?.get()
+                        ps?.discover()
                         val l = ps?.set?.lines?.firstOrNull { it.key != ps.line?.key && (it.key.contains(q) || it.siteName.contains(q)) }
                         android.util.Log.i("Lab", "line「$q」→ ${l?.key} · 现在 ${ps?.here()?.div(1000)}s")
                         if (l != null) ps.switchLine(l)

@@ -37,8 +37,10 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import dev.personal.tv.audio.AudioFx
 import dev.personal.tv.data.Prefs
 import dev.personal.tv.data.Progress
+import dev.personal.tv.data.ResumeRef
 import dev.personal.tv.data.Store
 import dev.personal.tv.data.Title
+import dev.personal.tv.source.ColdResume
 import dev.personal.tv.source.Episode
 import dev.personal.tv.source.Eps
 import dev.personal.tv.source.LineSet
@@ -69,7 +71,13 @@ import okhttp3.Request
  * 线路按「上次能播的 → 直链 → 普通网页 → VIP 网页」试；解析失败、播放出错、卡住 20 秒，自动换下一条（可关）。
  */
 @OptIn(UnstableApi::class)
-class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startName: String?, private val scope: CoroutineScope) {
+class PlaySession(
+    private val ctx: Context, val t: Title, startEp: Int, startName: String?, private val scope: CoroutineScope,
+    /** 界面（线路面板、路由）指定的线路：先放这一条、按它的分集放 [startEp] / [startName]，排在下载和上次的线路前面；播不了再按平常的顺序换 */
+    selected: PlayLine? = null,
+    /** 登录后回到播放页：接着从这个位置放（毫秒），-1 = 照常按观看记录 */
+    private val resumeAtMs: Long = -1,
+) {
     private val TAG = "Play"
     // 耳机、蓝牙音箱断开时暂停，不突然从电视喇叭外放
     // 和后台下载共用优先级：播放器加载时后台下载先让路
@@ -82,8 +90,15 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     }
     val player: ExoPlayer = ExoPlayer.Builder(ctx, AudioFx.renderers(ctx, selector)).setHandleAudioBecomingNoisy(true)
         .build()
-    /** 这部片的线路；断网时一条没搜到，重试时换成重新搜的 */
-    var set: LineSet by mutableStateOf(Lines.find(ctx, t))
+    /**
+     * 这部片的线路。线路搜索是懒的：冷启动续播命中、或者界面指定了线路能播的时候不搜（见 [discover]）；
+     * 沿用详情页已经搜过的（有就拿来用，不新开搜索）。没发现之前是个只放已知线路的空集。
+     * 断网时一条没搜到，重试时换成重新搜的（已知的线路、失败记录带过去，见 [discover]）。
+     */
+    var set: LineSet by mutableStateOf(Lines.get(t.id) ?: LineSet(t.id, t.name))
+        private set
+    /** 线路搜索开过没有（开过 = [set] 是 [Lines] 里登记的那个，界面可以放心显示「找到 N 条」） */
+    var discovered by mutableStateOf(false)
         private set
 
     /** 第几集：当前线路里的序号，从 1 开始 */
@@ -147,6 +162,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
 
     private var cfg: TvConfig? = null
     private var job: Job? = null
+    private var rendered = false
     private var ready: CompletableDeferred<Boolean>? = null
     private var startupVideoError = false
     private val tried = HashSet<String>()
@@ -179,6 +195,14 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     private var curHeaders: Map<String, String> = emptyMap()
     /** 本地下载好的集，做成一条「线路」；没有下载 = null */
     private var local: PlayLine? = null
+    /** 界面指定的线路（还没起播成功、也没失败过）：本地下载排在它后面。播成功、或者失败过就清掉 */
+    private var sel: PlayLine? = selected
+    /** 冷启动续播：上次成功的站点 + 详情 id，只在第一次起播用一次（见 [ColdResume]） */
+    private var cold: ResumeRef? = null
+    /** 当前这条线路是用哪份片源配置找到的（存冷启动线索按它、不按现在的全局片源；换了片源以后存出去的线索才不会对不上）；本地 = null */
+    private var lineCfgUrl: String? = null
+    /** 自己放进线路集的线路（不是搜出来的）：搬线路集时跟着走 */
+    private val adopted = HashSet<String>()
     private val localDl = HashMap<String, Pair<Downloads.Meta, Download>>()
 
     /** 当前线路的集数（没线路时按豆瓣） */
@@ -186,6 +210,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
 
     init {
         player.addListener(object : Player.Listener {
+            override fun onRenderedFirstFrame() { rendered = true }
             override fun onPlaybackStateChanged(s: Int) {
                 state = s
                 when (s) {
@@ -228,12 +253,27 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         })
         current = java.lang.ref.WeakReference(this)
         val prev = Store.progress[t.id]
-        val same = prev != null && if (startName != null && prev.epName != null) Eps.same(startName, prev.epName, t.name) else prev.ep == startEp
+        // 进度只对「同一集」有效：不是同一集（换了集、换了线路里的位置）一律从头，不拿别的集的位置
+        val same = ColdResume.sameEpisode(prev, startEp, startName, t.name)
         if (same && startName == null) epName = prev!!.epName
-        val startMs = if (same && !prev!!.finishedEp) prev.positionSec * 1000L else 0L
-        // 继续观看：上次在哪条线路看的就先用哪条（排在优先站点前面），那条播不了才换
-        pinned = prev?.line != null
-        start(startEp, startMs, prev?.line)
+        val startMs = resumeAtMs.takeIf { it >= 0 } ?: ColdResume.startMs(prev, startEp, startName, t.name)
+        if (selected != null) {
+            // 界面指定了线路：先用它。放进线路集里（线路面板看得到、换线时算一条），本地下载和冷启动记录都排在后面
+            adopt(selected)
+            pinned = true
+            start(startEp, startMs, selected.key, first = selected)
+        } else {
+            if (prev?.resume != null) {
+                if (same) cold = prev.resume
+                else if (prev.finishedEp && startName != null && prev.nextName == startName) {
+                    // 继续观看直接进下一集时也复用详情入口，但仍要在新目录里匹配这一集。
+                    cold = prev.resume.copy(epName = startName, epIdx = startEp)
+                }
+            }
+            // 继续观看：上次在哪条线路看的就先用哪条（排在优先站点前面），那条播不了才换
+            pinned = prev?.line != null
+            start(startEp, startMs, prev?.line)
+        }
         scope.launch {
             var tick = 0
             while (true) {
@@ -279,6 +319,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         enter(Phase.FIND)
         manual = only != null
         fail = null
+        loginLine = null
         askContinue = false
         resumeMs = -1
         job = scope.launch { run(startMs, prefer, only, first) }
@@ -292,6 +333,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         if (fail == null && (if (name != null) name == epName && n == ep else n == epNumber)) return
         save()
         tried.clear()
+        cold = null; sel = null
         epName = name
         start(n, 0, line?.key)
     }
@@ -338,23 +380,33 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
      * 有名字先按名字找；名字是序号的按数字找（线路里夹着「陪看」「彩蛋」时位置会错开）；
      * 按日期 / 期数分的线路找不到同名的就是没有，不按位置凑。
      */
-    private fun indexIn(l: PlayLine): Int? {
-        val eps = l.episodes
-        // 电影：每条线路就一个文件，名字各写各的（「BD国英双语双字修复版」↔「The.Wandering.Earth…mp4」），不用比名字
-        if (ep == 1 && eps.size == 1 && (line?.episodes?.size ?: 1) == 1) return 1
-        val n = epName ?: return Eps.indexOfNumber(eps, ep, t.name).takeIf { it >= 0 }?.plus(1)
-        // 选集行按名字点的、这个位置上正好是这个名字：直接用（同一条线路里有好几个「加更版」时，不能都放第一个）
-        if (eps.getOrNull(ep - 1)?.name == n) return ep
-        val i = Eps.indexOf(eps, n, t.name)
-        if (i >= 0) return i + 1
-        val num = Eps.number(n, t.name) ?: return null
-        if (Eps.dated(eps, t.name)) return null
-        return Eps.indexOfNumber(eps, num, t.name).takeIf { it >= 0 }?.plus(1)
+    private fun indexIn(l: PlayLine): Int? = ColdResume.indexIn(l.episodes, ep, epName, line?.episodes?.size ?: 1, t)
+
+    /**
+     * 开始找线路（没开过才开；[force] = 重新搜）。线路面板打开、续播和指定线路都没放成的时候调用。
+     * 换新的线路集时，已经在用的线路（冷启动取到的、界面指定的、正在播的）和它们的失败记录搬过去，
+     * 不然搜索结果里没有它们，当前线路、「线路」面板和指定线路的优先都会丢。
+     */
+    fun discover(force: Boolean = false) {
+        if (discovered && !force) return
+        discovered = true
+        val old = set
+        val fresh = Lines.find(ctx, t, force)
+        if (fresh !== old) {
+            val keep = HashSet<String>()
+            (listOfNotNull(line, sel) + old.lines.filter { it.key in adopted }).forEach { l ->
+                if (l.siteKey != LOCAL) { Lines.adopt(fresh, l); keep += l.key }
+            }
+            old.failed.forEach { (k, v) -> if (k in keep) fresh.failed.putIfAbsent(k, v) }
+            set = fresh
+        }
     }
+    private fun adopt(l: PlayLine) { adopted += l.key; Lines.adopt(set, l) }
 
     fun switchLine(l: PlayLine) {
         if (l.key == line?.key && fail == null) return
         tried.clear()
+        cold = null; sel = null
         set.failed.remove(l.key)
         pinned = true
         start(ep, here(), l.key, only = l)
@@ -406,10 +458,18 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         player.play()
     }
 
+    /** 这次播放不了是插件明确说要登录网盘（PluginError 里带登录字样）的那条线路；其它失败、断网都是 null */
+    private var loginLine: PlayLine? = null
+    /** 彻底播不了、且是上面那种明确的要登录：界面才给「去登录」的入口（用户自己按，不自动弹扫码） */
+    val loginRequired: Boolean
+        get() = fail != null && loginLine?.let { dev.personal.tv.source.PluginPortal.wantsLogin(set.failed[it.key]) } == true
+    /** 去登录前拿当前的线路，回来按同一集、同一线路、同一位置再来一次 */
+    fun loginTarget(): PlayLine? = loginLine
+
     /** 播放不了的时候按 OK：从头再找一遍（断网恢复后、或者线路刚好在抽风） */
     fun retry() {
         if (fail == null) return
-        if (set.done && set.lines.isEmpty()) set = Lines.find(ctx, t, force = true)
+        if (!discovered || set.done && set.lines.isEmpty()) discover(force = discovered)
         tried.clear()
         start(ep, here(), line?.key)
     }
@@ -425,11 +485,20 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             if (same && p.durationSec > 0 && wantMs > 0) Store.progress[t.id] = p.copy(positionSec = (wantMs / 1000).toInt(), lastWatched = System.currentTimeMillis())
             return
         }
-        if (line == null || durMs <= 0) return
+        // READY 可能只有音频或旧进度；视频没有真正出帧时不覆盖上一集。
+        if (!rendered || line == null || player.duration <= 0) return
+        durMs = player.duration
+        posMs = if (resumeMs >= 0 && player.playbackState == Player.STATE_IDLE) resumeMs else player.currentPosition
         val num = nameNumber
+        // 冷启动线索：只在真的出画面的在线线路上更新。本地播放、没有详情 id 的线路沿用旧的（同一集才沿用）
+        val old = Store.progress[t.id]
+        val en = epName
+        val l = line
+        val ref = (if (l != null && en != null) ColdResume.refFor(lineCfgUrl, l, en, ep, LOCAL) else null)
+            ?: old?.resume?.takeIf { en != null && Eps.same(en, it.epName, t.name) }
         Store.progress[t.id] = Progress(
             t.id, num ?: ep, (posMs / 1000).toInt(), (durMs / 1000).toInt(), System.currentTimeMillis(), line?.key, pinned, epName,
-            named = num == null && epName != null, nextName = nextName,
+            named = num == null && epName != null, nextName = nextName, resume = ref,
         )
     }
 
@@ -470,7 +539,9 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     private suspend fun run(startMs: Long, prefer: String?, only: PlayLine?, first: PlayLine?) {
         // 下载好的集先放本地的：不用联网、不用找线路（飞机上）
         loadLocal()
-        val lc = local?.takeIf { only == null || only.key == it.key }?.takeIf { it.key !in tried && indexIn(it) != null }
+        // 界面指定了线路时它先放，下载好的排后面（指定的播不了才用）
+        val skipLocal = only == null && sel?.let { it.siteKey != LOCAL && it.key !in tried } == true
+        val lc = local?.takeIf { only == null || only.key == it.key }?.takeIf { !skipLocal && it.key !in tried && indexIn(it) != null }
         if (lc != null) {
             tried += lc.key
             val i = indexIn(lc)!!
@@ -487,11 +558,40 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             fail = "片源配置加载失败：${e.message?.take(60)}"
             return
         }
+        // 冷启动：直接去上次成功的站点取这一集，不等全部站点搜完（搜索在后台照常跑，线路面板要用）
+        val cr = cold
+        cold = null
+        if (cr != null && only == null && first == null) {
+            val l = fastLine(c, cr)
+            if (l != null && l.key !in tried) {
+                val i = indexIn(l)
+                if (i != null) {
+                    adopt(l)
+                    tried += l.key
+                    ep = i
+                    epName = l.episodes[i - 1].name
+                    if (tryLine(c, l, l.episodes[i - 1], startMs)) return
+                    if (!Lines.online(ctx)) {
+                        set.failed.remove(l.key)
+                        player.stop()
+                        status = null
+                        fail = "网络断了。网络好了按 OK 重试"
+                        return
+                    }
+                }
+            }
+            status = "正在找线路…"
+        }
         val t0 = System.currentTimeMillis()
         while (true) {
+            // 指定的线路（first）还没试过时先放它，不搜；其余情况（冷启动没命中、指定的播不了、普通起播）才开搜
+            if (only == null && (first == null || first.key in tried || indexIn(first) == null)) discover()
             // 线路是陆续搜到的：先等一会儿上次能播的那条（20 秒，那个站排在最前面搜）、优先站点（15 秒，单站超时就是 15 秒）和直链（6 秒），
             // 别抓到第一条需要解析的就播
-            if (only == null && first == null && !set.done) {
+            // 继续观看的那条线路已经搜到、能放这一集：直接用，不再等优先站点和直链
+            val havePrev = pinned && prefer != null &&
+                set.lines.any { it.key == prefer && it.key !in tried && it.key !in set.failed && indexIn(it) != null }
+            if (only == null && first == null && !set.done && !havePrev) {
                 val age = System.currentTimeMillis() - t0
                 // 上次那个站已经搜完了（这次没搜到）、换了片源没有这个站、被屏蔽了：不用等
                 val prevSite = prefer?.substringBefore('|')
@@ -566,6 +666,28 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         }
     }
 
+    /**
+     * 冷启动：去上次成功的站点取详情，找到记录的那个来源。记录对不上（换了片源、站点没了、被屏蔽）、
+     * 站点 [COLD_S] 秒没回、详情里没有这个来源，都返回 null，照旧等搜索。
+     */
+    private suspend fun fastLine(c: TvConfig, r: ResumeRef): PlayLine? {
+        if (!ColdResume.usable(r, c.url, c.sites.map { it.key }, Prefs.blocked, epName, ep, t.name)) return null
+        val s = c.sites.firstOrNull { it.key == r.siteKey } ?: return null
+        status = "正在打开上次的线路 · ${r.siteName}"
+        return try {
+            val vod = Lines.yieldTo {
+                val detail = scope.async(Dispatchers.IO) { Sites.get(ctx, c, s).detail(r.vodId) }
+                try { withTimeoutOrNull(COLD_S * 1000L) { detail.await() } } finally { detail.cancel() }
+            }
+            ColdResume.buildLine(r, vod, t.name).also { Log.i(TAG, "冷启动 ${r.siteKey}|${r.flag}：${if (it != null) "取到 ${it.episodes.size} 集" else "没取到，走完整搜索"}") }
+        } catch (x: kotlinx.coroutines.CancellationException) {
+            throw x
+        } catch (x: Throwable) {
+            Log.w(TAG, "冷启动取详情失败 ${r.siteKey}", x)
+            null
+        }
+    }
+
     private suspend fun tryLine(c: TvConfig?, l: PlayLine, e: Episode, startMs: Long): Boolean {
         line = l
         if (l.siteKey == LOCAL) return tryLocal(l, e, startMs)
@@ -589,6 +711,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             // 插件进程里抛的 PluginError 过 binder 后只剩文字
             (x as? dev.personal.tv.source.PluginError ?: root as? dev.personal.tv.source.PluginError)?.message?.let {
                 why = it.take(48) + if (dev.personal.tv.source.PluginPortal.wantsLogin(it)) "（在「设置 → 网盘登录」登录）" else ""
+                if (dev.personal.tv.source.PluginPortal.wantsLogin(it)) loginLine = l
             }
             null
         }
@@ -621,6 +744,8 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         }
         status = null
         enter(Phase.PLAY)
+        sel = null
+        lineCfgUrl = c.url
         set.failed.remove(l.key)
         Log.i(TAG, "✓ ${l.key} 第 $ep 集「$epName」 ${System.currentTimeMillis() - t0}ms ${android.net.Uri.parse(selected.url).host.orEmpty()}")
         save()
@@ -644,6 +769,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         ready = r
         bufferingSince = 0
         failedDecoder = null
+        rendered = false
         player.setMediaSource(DefaultMediaSourceFactory(ds).createMediaSource(item), startMs)
         player.setPlaybackSpeed(speed)
         player.prepare()
@@ -678,6 +804,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         ready = r
         bufferingSince = 0
         failedDecoder = null
+        rendered = false
         player.setMediaSource(DefaultMediaSourceFactory(ds).createMediaSource(d.request.toMediaItem()), startMs)
         player.setPlaybackSpeed(speed)
         player.prepare()
@@ -692,6 +819,8 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         }
         status = null
         enter(Phase.PLAY)
+        sel = null
+        lineCfgUrl = null
         Log.i(TAG, "✓ 本地 ${m.epName}")
         save()
         return true
@@ -879,6 +1008,8 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         const val RESOLVE_S = 45
         const val READY_S = 25
         const val STALL_S = 20
+        /** 冷启动取上次那个站点的详情最多等几秒 */
+        const val COLD_S = 8
 
         fun speedText(bps: Long) = when {
             bps <= 0 -> "没收到数据"

@@ -171,7 +171,7 @@ fun PhonePlayer(r: Route.Player) {
             if (ps.fail == null) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                 Tx(st, 15.sp, Palette.T1, FontWeight.SemiBold)
                 ps.detail()?.let { Tx(it, 12.5.sp, Palette.T2, modifier = Modifier.padding(top = 6.dp)) }
-                if (ps.set.lines.isNotEmpty()) Tx("点「线路」可以手动选", 11.5.sp, Palette.T3, modifier = Modifier.padding(top = 4.dp))
+                if (ps.set.lines.isNotEmpty() || !ps.discovered) Tx("点「线路」可以手动选", 11.5.sp, Palette.T3, modifier = Modifier.padding(top = 4.dp))
             }
         }
         // 画面出来以后右上角小字：暂停时缓冲进度和时间，卡住时速度
@@ -269,7 +269,7 @@ fun PhonePlayer(r: Route.Player) {
                         Spacer(Modifier.weight(1f))
                         CtlText(if (ps.speed == 1f) "倍速" else "${fmtSpeed(ps.speed)}x") { panel = Panel.SPEED }
                         if (t.isEpisodic && ps.episodeCount > 1) CtlText("选集") { panel = Panel.EPISODES }
-                        CtlText("线路 ${ps.set.lines.size}") { panel = Panel.LINES }
+                        CtlText(if (ps.discovered) "线路 ${ps.set.lines.size}" else "线路") { ps.discover(); panel = Panel.LINES }
                     }
                 }
             }
@@ -467,10 +467,11 @@ private fun EpisodePanel(ps: PlaySession, pick: (Int, String) -> Unit) {
 /** 线路：按自动选的顺序排，红点是试过不行的 */
 @Composable
 private fun LinePanel(ps: PlaySession, pos: Int, pick: (PlayLine) -> Unit) {
+    LaunchedEffect(Unit) { ps.discover() }
     val set = ps.set
     val cur = ps.line
     val lines = Lines.ordered(set, cur?.key, emptyList())
-    PanelTitle("线路", "找到 ${lines.size} 条" + (if (!set.done) " · 还在搜 ${set.searched}/${set.total}" else " · ${set.total} 个站点") + " · 片源「${Sources.name}」")
+    PanelTitle("线路", (if (lines.isEmpty() && !set.done) "正在找线路…" else "找到 ${lines.size} 条") + (if (!set.done) " · 还在搜 ${set.searched}/${set.total}" else " · ${set.total} 个站点") + " · 片源「${Sources.name}」")
     Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Tx("自动换线路", 14.sp)

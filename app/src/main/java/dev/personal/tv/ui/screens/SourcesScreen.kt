@@ -44,6 +44,11 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.zxing.BarcodeFormat
@@ -122,6 +127,13 @@ fun SourcesScreen() {
     var armed by remember { mutableStateOf<String?>(null) }
     var armedAt by remember { mutableLongStateOf(0L) }
 
+    // 只读预览某个已保存的配置（→ 键进入，返回键退出；不改当前片源）
+    var previewing by remember { mutableStateOf<Sources.Entry?>(null) }
+    previewing?.let { p ->
+        ConfigPreviewPane(p) { previewing = null; mem.pending = true } // 退出后焦点回到进来时的那一行
+        return
+    }
+
     Row(
         Modifier.fillMaxSize().padding(start = Dimens.SafeH, end = Dimens.SafeH, top = 36.dp, bottom = Dimens.SafeV),
         horizontalArrangement = Arrangement.spacedBy(40.dp),
@@ -142,7 +154,14 @@ fun SourcesScreen() {
                             if (!cur) { Sources.select(e); nav.toast("已切换到「${e.name}」，线路会重新找") }
                         },
                         modifier = Modifier.fillMaxWidth().remembered(mem, "src:${e.url}", isDefault = cur)
-                            .then(if (cur) Modifier.focusRequester(first) else Modifier),
+                            .then(if (cur) Modifier.focusRequester(first) else Modifier)
+                            // → 预览这个配置（单独的动作，OK 仍是切换）
+                            .onKeyEvent { k ->
+                                if (k.key == Key.DirectionRight) {
+                                    if (k.type == KeyEventType.KeyDown) { typing = false; kb?.hide(); previewing = e }
+                                    true
+                                } else false
+                            },
                         corner = 9.dp, scale = 1.02f, ring = false,
                         onMenu = {
                             val now = System.currentTimeMillis()
@@ -240,6 +259,7 @@ fun SourcesScreen() {
             }
             Row(Modifier.padding(top = 8.dp, start = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 Hint("OK", "切换", 9.5.sp)
+                Hint("→", "预览配置", 9.5.sp)
                 Hint("≡", "连按两次删除", 9.5.sp)
             }
         }

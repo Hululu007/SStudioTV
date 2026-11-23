@@ -36,6 +36,8 @@ data class PlayLine(
     val vodName: String,
     val remarks: String,
     val episodes: List<Episode>,
+    /** 站点里这部片的详情 id（冷启动续播用）；本地线路等没有 = 空 */
+    val vodId: String = "",
 ) {
     val key get() = "$siteKey|$flag"
     /** 分集地址本身就是 m3u8/mp4，不用再解析，最稳 */
@@ -109,6 +111,15 @@ object Lines {
     suspend fun <T> yieldTo(block: suspend () -> T): T {
         playing.value++
         try { return block() } finally { playing.value-- }
+    }
+
+    /** 把已知能用的线路（冷启动续播取到的、界面选定的）放进线路集；已经有同 key 的不动。返回集里的那一条 */
+    fun adopt(set: LineSet, l: PlayLine): PlayLine {
+        set.lines.firstOrNull { it.key == l.key }?.let { return it }
+        set.sure += l.key
+        set.lines.add(l)
+        rerank(set)
+        return l
     }
 
     /** 开始（或复用）一部片的线路搜索。搜完 30 分钟内不重搜 */
@@ -334,7 +345,7 @@ object Lines {
         val name = v.name.ifBlank { t.name }
         val built = withContext(Dispatchers.Default) {
             v.flags.filter { it.episodes.isNotEmpty() }.map { f ->
-                val line = PlayLine(s.key, s.name, f.name, name, v.remarks, Eps.ascending(Eps.trimCommon(f.episodes), name))
+                val line = PlayLine(s.key, s.name, f.name, name, v.remarks, Eps.ascending(Eps.trimCommon(f.episodes), name), vodId)
                 line to Eps.LineInfo(line.episodes, name).also { it.sig }
             }
         }
@@ -456,7 +467,7 @@ object Lines {
                     f.episodes.isNotEmpty() && !(!t.isEpisodic && f.episodes.size > 3) &&
                         !(t.isEpisodic && f.episodes.size == 1 && (t.totalEps > 1 || t.airedEps > 1))
                 }.map { f ->
-                    val line = PlayLine(s.key, s.name, f.name, v.name, v.remarks, Eps.ascending(Eps.trimCommon(f.episodes), t.name))
+                    val line = PlayLine(s.key, s.name, f.name, v.name, v.remarks, Eps.ascending(Eps.trimCommon(f.episodes), t.name), v.id)
                     Triple(line, Eps.LineInfo(line.episodes, t.name).also { it.sig }, sure)
                 }
             }

@@ -108,6 +108,10 @@ data class Progress(
     val named: Boolean? = null,
     /** 存进度时算好的下一集名字（看完以后首页、详情页按它接着放，不用等线路搜完）；没有下一集 = null */
     val nextName: String? = null,
+    /** 上次成功起播的站点 / 来源 / 详情 id：冷启动时直接去这个站点取这一集，不等全部站点重新搜索；老记录没有（null） */
+    val resume: ResumeRef? = null,
+    /** 只隐藏首页卡片，不删除集名、时间或冷启动续播线索。再次观看后自然恢复显示。 */
+    val hiddenFromContinue: Boolean = false,
 ) {
     /** [ep] 是线路里的位置，不是集数 */
     fun isNamed(title: String) = named ?: (epName != null && !dev.personal.tv.source.Eps.isNumber(epName, title))
@@ -122,6 +126,25 @@ data class Progress(
     val finishedEp get() = durationSec > 0 && positionSec >= durationSec - 60
     val remainingMin get() = ((durationSec - positionSec) / 60).coerceAtLeast(1)
 }
+
+/**
+ * 冷启动续播用的最小线索（见 [dev.personal.tv.source.ColdResume]）。
+ * 只存站点 key、来源名、站点里的详情 id、分集名和位置，以及片源配置的指纹；
+ * 不存 cookie、播放地址（可能带签名、会过期）、配置地址本身。
+ */
+data class ResumeRef(
+    /** 片源配置地址的指纹（SHA-256 前 16 位）；换了片源就对不上，不用 */
+    val cfg: String,
+    val siteKey: String,
+    val siteName: String,
+    val flag: String,
+    /** 站点里这部片的详情 id */
+    val vodId: String,
+    val vodName: String,
+    /** 成功起播的那一集的名字、在线路里的位置（1 开始，只是提示） */
+    val epName: String,
+    val epIdx: Int,
+)
 
 data class Glow(val x: Float, val y: Float, val r: Float, val color: Color)
 

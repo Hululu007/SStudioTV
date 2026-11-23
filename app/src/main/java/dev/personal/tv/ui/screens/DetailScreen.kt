@@ -129,6 +129,17 @@ fun DetailScreen(r: Route.Detail) {
     val epReq = remember { FocusRequester() }
     val simReq = remember { FocusRequester() }
     var inSec2 by remember { mutableStateOf(false) }
+    // 线路浏览：打开时的目标（序号, 名字）；上次停的线路和分集留着，下次接着停
+    val linesReq = remember { FocusRequester() }
+    var browseN by rememberSaveable { mutableIntStateOf(0) }
+    var browseName by rememberSaveable { mutableStateOf<String?>(null) }
+    var browseLine by rememberSaveable { mutableStateOf<String?>(null) }
+    var browseEp by rememberSaveable { mutableStateOf<String?>(null) }
+    var closeTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(closeTick) {
+        if (closeTick == 0) return@LaunchedEffect
+        withFrameNanos { }; kotlinx.coroutines.delay(60); runCatching { linesReq.requestFocus() }
+    }
     // 选集按哪条线路显示：线路是陆续搜到的，焦点在选集行里时先不换，免得按钮在手底下变了
     val live = Lines.ref(Lines.get(t.id), p?.line, t.name)
     var frozen by remember { mutableStateOf<PlayLine?>(null) }
@@ -198,7 +209,7 @@ fun DetailScreen(r: Route.Detail) {
                             }
                         }
                         T(t.desc.ifEmpty { if (t.full) "" else "正在从豆瓣取简介…" }, 11.5.sp, Palette.T2, lines = 2, lineHeight = 19.sp, modifier = Modifier.padding(top = 8.dp).width(500.dp))
-                        Buttons(t, p, ref, mem, r, playReq, epReq, simReq, Modifier.padding(top = 14.dp))
+                        Buttons(t, p, ref, mem, r, playReq, epReq, simReq, linesReq, { ep, name -> browseN = ep; browseName = name }, Modifier.padding(top = 14.dp))
                     }
                     if (hasEpisodes(t, ref)) {
                         val ranking = Lines.get(t.id)?.ranking
@@ -230,6 +241,15 @@ fun DetailScreen(r: Route.Detail) {
                     }
                 }
             }
+        }
+        if (browseN > 0) {
+            val tg = browseN to browseName
+            LineBrowser(
+                t, Lines.get(t.id), ref, tg, browseLine, browseEp,
+                onFocusLine = { browseLine = it }, onFocusEp = { browseEp = it },
+                onClose = { browseN = 0; closeTick++ },
+                onPlay = { line, ep, name -> nav.play(t.id, ep, name, selected = line) },
+            )
         }
     }
 }
@@ -293,7 +313,8 @@ private fun DoubanBox(t: Title, modifier: Modifier) {
 @Composable
 private fun Buttons(
     t: Title, p: Progress?, ref: PlayLine?, mem: FocusMemory, r: Route.Detail,
-    playReq: FocusRequester, epReq: FocusRequester, simReq: FocusRequester, modifier: Modifier,
+    playReq: FocusRequester, epReq: FocusRequester, simReq: FocusRequester, linesReq: FocusRequester,
+    onBrowse: (Int, String?) -> Unit, modifier: Modifier,
 ) {
     val nav = LocalNav.current
     val ctx = LocalContext.current
@@ -359,7 +380,7 @@ private fun Buttons(
             T("找类似", 13.sp, fg, FontWeight.SemiBold)
         }
         if (n > 0) {
-            PillButton({ nav.play(t.id, ep, epName, openLines = true) }, Modifier.remembered(mem, "lines")) { fg ->
+            PillButton({ onBrowse(ep, epName) }, Modifier.focusRequester(linesReq).remembered(mem, "lines")) { fg ->
                 T("线路 · $n 条", 13.sp, fg, FontWeight.SemiBold)
                 T(if (searching) "还在找…" else "自动选", 10.sp, fg.copy(alpha = 0.6f))
             }

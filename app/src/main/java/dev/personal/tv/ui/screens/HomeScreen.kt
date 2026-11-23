@@ -329,7 +329,7 @@ private fun ContinueCard(t: Title, p: Progress, modifier: Modifier, onFocus: () 
                 listOf(
                     MenuItem("打开详情") { nav.openDetail(t.id) },
                     MenuItem("找类似") { nav.openDetail(t.id, similar = true) },
-                    MenuItem("移出继续观看") { Store.progress.remove(t.id); nav.toast("已移出，观看记录不会删除") },
+                    MenuItem("移出继续观看") { Store.hideFromContinue(t.id); nav.toast("已移出，观看记录不会删除") },
                 ),
             )
         },

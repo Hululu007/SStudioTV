@@ -65,7 +65,7 @@ sealed class Route(val key: String) {
     data object Main : Route("main")
     data object Search : Route("search")
     class Detail(val id: String, val similar: Boolean, n: Int) : Route("detail:$id:$n")
-    class Player(val id: String, val ep: Int, val epName: String?, val openLines: Boolean, n: Int) : Route("player:$id:$n")
+    class Player(val id: String, val ep: Int, val epName: String?, val openLines: Boolean, val selected: dev.personal.tv.source.PlayLine? = null, val n: Int, val resumeAtMs: Long = -1) : Route("player:$id:$n")
     data object Lab : Route("lab")
     data object Settings : Route("settings")
     data object Sources : Route("sources")
@@ -110,12 +110,22 @@ class Navigator {
     }
 
     fun openDetail(id: String, similar: Boolean = false) = push(Route.Detail(id, similar, ++seq))
-    fun play(id: String, ep: Int, epName: String? = null, openLines: Boolean = false) = push(Route.Player(id, ep, epName, openLines, ++seq))
+    fun play(id: String, ep: Int, epName: String? = null, openLines: Boolean = false, selected: dev.personal.tv.source.PlayLine? = null) =
+        push(Route.Player(id, ep, epName, openLines, selected, ++seq))
     fun openSearch() = push(Route.Search)
     fun openLab() = push(Route.Lab)
     fun openSettings() = push(Route.Settings)
     fun openSources() = push(Route.Sources)
     fun openPans() = push(Route.Pans)
+    /**
+     * 播放页里用户自己按键去登录网盘：把栈顶的播放页换成「同一集、同一线路、同一位置」（同一个 key，焦点、状态照旧），
+     * 再进网盘登录页；返回后播放页按这个重新来一次。
+     */
+    fun openPansFromPlayer(ep: Int, epName: String?, line: dev.personal.tv.source.PlayLine?, posMs: Long) {
+        val top = stack.lastOrNull() as? Route.Player ?: return
+        stack[stack.lastIndex] = Route.Player(top.id, ep, epName, false, line, top.n, posMs)
+        openPans()
+    }
     fun openDownloads() = push(Route.Downloads)
     fun playLive(group: Int, channel: Int) = push(Route.LivePlay(group, channel, ++seq))
     fun playUrl(title: String, url: String, headers: Map<String, String>, parse: Boolean, format: String? = null) =
