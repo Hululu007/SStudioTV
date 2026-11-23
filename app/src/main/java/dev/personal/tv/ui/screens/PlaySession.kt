@@ -511,7 +511,9 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             ep = i
             // 按名字 / 集数认出来的才改成这条线路里的名字；按位置凑的（线路里的名字认不出数字）只拿来播，不改这一集是谁
             val found = cand.episodes[i - 1].name
-            if (epName.let { it == null || Eps.same(found, it, t.name) || Eps.number(found, t.name)?.let { n -> n == Eps.number(it, t.name) } == true }) epName = found
+            // 但别把「10.22 第1期」换成按集编号的线路里的「第01集」：日期、期号丢了，后面按日期起名的线路就都认不出这一集了
+            if (epName.let { it == null || !(Eps.named(it, t.name) && !Eps.named(found, t.name)) &&
+                    (Eps.same(found, it, t.name) || Eps.number(found, t.name)?.let { n -> n == Eps.number(it, t.name) } == true) }) epName = found
             if (tryLine(c, cand, cand.episodes[i - 1], startMs)) return
             // 断网了不是线路的错：不记失败，也别一条条换下去
             if (!Lines.online(ctx)) {

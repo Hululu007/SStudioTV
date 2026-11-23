@@ -215,4 +215,10 @@ class LineScoreTest {
         // 同一天两期、键一样：按期号挑，不再总是第一个
         assertEquals(1, Eps.indexOf(dated, "第20261022期第02期", t))
     }
+
+    @Test fun namedEpisodes() {
+        val t = "后会友期"
+        assertTrue(Eps.named("20261022第1期", t) && Eps.named("第1期", t) && Eps.named("第20261022期第01期", t))
+        assertTrue(!Eps.named("第01集", t) && !Eps.named("01", t))
+    }
 }

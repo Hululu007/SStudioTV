@@ -293,6 +293,9 @@ object Eps {
      */
     fun key(name: String, title: String = ""): String = parse(name, title).key
 
+    /** 名字里有日期或「第N期」（综艺按名字认的那种），换线路认集全靠它 */
+    fun named(name: String, title: String = "") = parse(name, title).let { it.date != null || it.unit == '期' }
+
     /** 这一集的名字其实就是个序号 */
     fun isNumber(name: String, title: String = "") = parse(name, title).plain
 
