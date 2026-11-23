@@ -29,6 +29,9 @@ import androidx.media3.exoplayer.offline.Downloader
 import androidx.media3.exoplayer.offline.ProgressiveDownloader
 import dev.personal.tv.media.Downloads
 import dev.personal.tv.media.MediaCache
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.video.MediaCodecVideoDecoderException
+import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import dev.personal.tv.audio.AudioFx
@@ -70,7 +73,14 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     private val TAG = "Play"
     // 耳机、蓝牙音箱断开时暂停，不突然从电视喇叭外放
     // 和后台下载共用优先级：播放器加载时后台下载先让路
-    val player: ExoPlayer = ExoPlayer.Builder(ctx, AudioFx.renderers(ctx)).setHandleAudioBecomingNoisy(true)
+    // 只对本次播放地址跳过一个已实际报错的解码器；切集、换地址后恢复系统原顺序。
+    @Volatile private var failedDecoder: String? = null
+    private val selector = MediaCodecSelector { mime, secure, tunnel ->
+        val all = MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunnel)
+        val skip = failedDecoder
+        if (skip == null) all else all.filterNot { it.name == skip }.ifEmpty { all }
+    }
+    val player: ExoPlayer = ExoPlayer.Builder(ctx, AudioFx.renderers(ctx, selector)).setHandleAudioBecomingNoisy(true)
         .build()
     /** 这部片的线路；断网时一条没搜到，重试时换成重新搜的 */
     var set: LineSet by mutableStateOf(Lines.find(ctx, t))
@@ -138,6 +148,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
     private var cfg: TvConfig? = null
     private var job: Job? = null
     private var ready: CompletableDeferred<Boolean>? = null
+    private var startupVideoError = false
     private val tried = HashSet<String>()
     private var bufferingSince = 0L
     /** 当前线路是用户手动选的 */
@@ -191,8 +202,25 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             }
             override fun onPlayerError(e: PlaybackException) {
                 Log.w(TAG, "error ${line?.key}", e)
+                // Media3 自带的 fallback 只处理初始化失败。解码第一批帧时失败也可以同源换解码器。
+                val decoder = generateSequence<Throwable>(e) { it.cause }.filterIsInstance<MediaCodecVideoDecoderException>()
+                    .firstOrNull()?.codecInfo
+                if (decoder != null && failedDecoder == null && (e as? ExoPlaybackException)?.rendererFormat?.drmInitData == null &&
+                    runCatching { MediaCodecSelector.DEFAULT.getDecoderInfos(decoder.mimeType, decoder.secure, decoder.tunneling)
+                        .any { it.name != decoder.name } }.getOrDefault(false)) {
+                    failedDecoder = decoder.name
+                    Log.i(TAG, "同源重试：跳过解码器 ${decoder.name}")
+                    player.prepare()
+                    return
+                }
                 val r = ready
-                if (r != null && r.isActive) { r.complete(false); return }
+                if (r != null && r.isActive) {
+                    startupVideoError = e is ExoPlaybackException && e.rendererFormat?.sampleMimeType?.startsWith("video/") == true &&
+                        e.errorCode in setOf(PlaybackException.ERROR_CODE_DECODING_FAILED, PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+                            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES, PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED)
+                    r.complete(false)
+                    return
+                }
                 // 断网不是线路的错：别把好线路一条条记成失败，等网络好了按 OK 重试
                 if (!Lines.online(ctx)) { player.stop(); status = null; fail = "网络断了。网络好了按 OK 重试"; return }
                 failover("播放出错（${e.errorCodeName}）")
@@ -569,8 +597,37 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             Log.i(TAG, "✗ ${l.key} 解析失败 ${System.currentTimeMillis() - t0}ms")
             return false
         }
-        status = "缓冲中…"
-        enter(Phase.BUFFER)
+        var selected = info
+        var ok = false
+        val urls = (listOf(info.url) + info.alternatives).distinct().take(4)
+        for ((idx, url) in urls.withIndex()) {
+            selected = if (idx == 0) info else info.copy(url = url, alternatives = emptyList())
+            status = if (idx == 0) "缓冲中…" else "正在尝试同线路的备用画质…"
+            enter(Phase.BUFFER)
+            ok = prepareStream(selected, startMs)
+            if (ok || !startupVideoError) break
+            player.stop()
+        }
+        if (!ok && !startupVideoError && reuse != null) {
+            // 预缓存时拿到的地址过期了：重新解析一次
+            player.stop()
+            return tryLine(c, l, e, startMs)
+        }
+        if (!ok) {
+            set.failed.putIfAbsent(l.key, if (startupVideoError) "设备无法解码此视频" else "播放失败")
+            Log.i(TAG, "✗ ${l.key} 播放失败")
+            player.stop()
+            return false
+        }
+        status = null
+        enter(Phase.PLAY)
+        set.failed.remove(l.key)
+        Log.i(TAG, "✓ ${l.key} 第 $ep 集「$epName」 ${System.currentTimeMillis() - t0}ms ${android.net.Uri.parse(selected.url).host.orEmpty()}")
+        save()
+        return true
+    }
+
+    private suspend fun prepareStream(info: PlayInfo, startMs: Long): Boolean {
         val fmt = info.format ?: withContext(Dispatchers.IO) { formatOf(info) }
         info.format = fmt
         curHeaders = info.headers
@@ -583,31 +640,16 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
             }
         }.build()
         val r = CompletableDeferred<Boolean>()
+        startupVideoError = false
         ready = r
         bufferingSince = 0
+        failedDecoder = null
         player.setMediaSource(DefaultMediaSourceFactory(ds).createMediaSource(item), startMs)
         player.setPlaybackSpeed(speed)
         player.prepare()
         player.playWhenReady = !hidden
-        val ok = withTimeoutOrNull(READY_S * 1000L) { r.await() } ?: false
-        ready = null
-        if (!ok && reuse != null) {
-            // 预缓存时拿到的地址过期了：重新解析一次
-            player.stop()
-            return tryLine(c, l, e, startMs)
-        }
-        if (!ok) {
-            set.failed.putIfAbsent(l.key, "播放失败")
-            Log.i(TAG, "✗ ${l.key} 播放失败 ${info.url.take(80)}")
-            player.stop()
-            return false
-        }
-        status = null
-        enter(Phase.PLAY)
-        set.failed.remove(l.key)
-        Log.i(TAG, "✓ ${l.key} 第 $ep 集「$epName」 ${System.currentTimeMillis() - t0}ms ${info.url.take(80)}")
-        save()
-        return true
+        return try { withTimeoutOrNull(READY_S * 1000L) { r.await() } ?: false }
+        finally { if (ready === r) ready = null }
     }
 
     /** 查这部片下载好的集，做成一条本地线路 */
@@ -635,6 +677,7 @@ class PlaySession(private val ctx: Context, val t: Title, startEp: Int, startNam
         val r = CompletableDeferred<Boolean>()
         ready = r
         bufferingSince = 0
+        failedDecoder = null
         player.setMediaSource(DefaultMediaSourceFactory(ds).createMediaSource(d.request.toMediaItem()), startMs)
         player.setPlaybackSpeed(speed)
         player.prepare()

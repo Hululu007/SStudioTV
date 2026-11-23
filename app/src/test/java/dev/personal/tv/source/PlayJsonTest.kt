@@ -34,7 +34,9 @@ class PlayJsonTest {
     }
 
     @Test fun multiQualityArrayTakesFirstUrl() {
-        assertEquals("http://hd", VodJson.play("""{"url":["1080P","http://hd","720P","http://sd"]}""", "id").url)
+        val p = VodJson.play("""{"url":["4K","http://uhd","原画","http://uhd","坏项",null,"1080P","http://hd","720P","http://sd","无地址"]}""", "id")
+        assertEquals("http://uhd", p.url)
+        assertEquals(listOf("http://hd", "http://sd"), p.alternatives)
     }
 
     @Test fun nonJsonKeepsOldBehaviour() {

@@ -9,6 +9,7 @@ import androidx.media3.common.audio.AudioProcessor.AudioFormat
 import androidx.media3.common.audio.AudioProcessor.UnhandledAudioFormatException
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
@@ -47,14 +48,14 @@ object AudioFx {
 
     /** ExoPlayer 用这个 RenderersFactory，声音就会经过 [Processor] */
     @OptIn(UnstableApi::class)
-    fun renderers(ctx: Context) = object : DefaultRenderersFactory(ctx) {
+    fun renderers(ctx: Context, selector: MediaCodecSelector = MediaCodecSelector.DEFAULT) = object : DefaultRenderersFactory(ctx) {
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink =
             DefaultAudioSink.Builder(context)
                 .setAudioProcessors(arrayOf(Processor()))
                 .setEnableFloatOutput(enableFloatOutput)
                 .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                 .build()
-    }
+    }.setMediaCodecSelector(selector).setEnableDecoderFallback(true)
 
     /**
      * Media3 音频处理器：PCM 16 位 / float 进来，过 [LoudnessDsp] 再出去。

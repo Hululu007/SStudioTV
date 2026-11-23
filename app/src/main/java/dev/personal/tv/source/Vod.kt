@@ -39,7 +39,9 @@ data class Vod(
 data class VodPage(val classes: List<VodClass>, val list: List<Vod>, val ratio: Float? = null)
 
 /** 播放解析结果。parse = true 表示 url 还是网页，需要再嗅探/解析 */
-data class PlayInfo(val url: String, val headers: Map<String, String>, val parse: Boolean, val jx: Boolean) {
+data class PlayInfo(val url: String, val headers: Map<String, String>, val parse: Boolean, val jx: Boolean,
+    val alternatives: List<String> = emptyList(),
+) {
     /** 探测出来的格式（hls / dash / mp4 / html…），地址没有扩展名时播放器靠它选解码方式 */
     var format: String? = null
 }
@@ -80,9 +82,14 @@ object VodJson {
         val o = root(text) ?: return PlayInfo(fallbackUrl, emptyMap(), parse = true, jx = false)
         val u = o.get("url")
         // 多清晰度时 url 是 ["1080P", "http://…", "720P", "http://…"]
+        val variants = if (u?.isJsonArray == true) u.asJsonArray.toList().let { a ->
+            (if (a.size == 1) a else a.filterIndexed { i, _ -> i % 2 == 1 })
+                .mapNotNull { it.takeIf { v -> v.isJsonPrimitive && v.asJsonPrimitive.isString }?.asString?.trim() }
+                .filter { it.isNotBlank() }.distinct()
+        } else emptyList()
         val url = when {
             u == null || u.isJsonNull -> ""
-            u.isJsonArray -> u.asJsonArray.let { a -> if (a.size() >= 2) a[1].asString else a.firstOrNull()?.asString.orEmpty() }
+            u.isJsonArray -> variants.firstOrNull().orEmpty()
             u.isJsonPrimitive -> u.asString
             else -> ""
         }.trim()
@@ -96,6 +103,7 @@ object VodJson {
             headers = o.map("header").ifEmpty { o.map("headers") },
             parse = parse,
             jx = o.int("jx", 0) == 1,
+            alternatives = variants.drop(1),
         )
     }
 
