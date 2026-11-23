@@ -69,6 +69,8 @@ class LineSet(val titleId: String, val title: String = "") {
     internal var rankFailed = 0
     /** 每条线路拆好的分集名字（打分用），线路 key → */
     internal val infos = HashMap<String, Eps.LineInfo>()
+    /** 站点给了年份 / 地区、而且跟豆瓣对得上的线路（还有从站点点开的）。没资料的可能是同名的另一部，排在这些后面 */
+    internal val sure = HashSet<String>()
 }
 
 /**
@@ -138,6 +140,8 @@ object Lines {
                 // 从站点里点开的：那个站点自己的线路最可靠（按片名配到的别的站可能是同名的另一部）
                 .thenByDescending { it.siteKey == origin }
                 .thenBy { Prefs.rank(it.siteKey) ?: Int.MAX_VALUE }
+                // 站点资料跟豆瓣对得上的先试；没资料的可能是同名的另一部
+                .thenByDescending { it.key in set.sure }
                 .thenByDescending { it.key == prefer }
                 .thenBy { if (it.direct) 0 else if (it.flag in vipFlags) 2 else 1 }
                 .thenByDescending { it.episodes.size },
@@ -152,7 +156,8 @@ object Lines {
     fun ref(set: LineSet?, lastKey: String?, title: String = ""): PlayLine? {
         if (set == null) return null
         choice[set.titleId]?.let { k -> set.lines.firstOrNull { it.key == k }?.let { return it } }
-        val r = ranked(set)
+        // 有资料对得上的线路时，选集只按这些显示（没资料的可能是同名的另一部，集数多也不算）
+        val r = ranked(set).let { all -> if (set.sure.isEmpty()) all else all.filter { it.first.key in set.sure }.ifEmpty { all } }
         SourceSearch.origin(set.titleId)?.let { o ->
             val own = set.lines.filter { it.siteKey == o.siteKey }
             if (own.isNotEmpty()) return own.firstOrNull { it.key == lastKey } ?: r.firstOrNull { it.first.siteKey == o.siteKey }?.first ?: own.first()
@@ -267,7 +272,7 @@ object Lines {
         // 插件站同时 8 个（插件进程扛不住更多）；采集站只是 HTTP 请求，同时 16 个
         val sem = Semaphore(8)
         val cmsSem = Semaphore(16)
-        suspend fun run(list: List<SiteCfg>, accept: (PlayLine) -> Boolean) = coroutineScope {
+        suspend fun run(list: List<SiteCfg>, accept: (PlayLine, Boolean) -> Boolean) = coroutineScope {
             list.forEach { s ->
                 launch {
                     (if (s.kind == SiteKind.JAR) sem else cmsSem).withPermit {
@@ -280,7 +285,7 @@ object Lines {
             }
         }
         coroutineScope {
-            val own = launch { withTimeoutOrNull(45_000) { run(sites) { true } } }
+            val own = launch { withTimeoutOrNull(45_000) { run(sites) { _, _ -> true } } }
             if (cross.isEmpty()) return@coroutineScope
             // 当前片源搜完再判断；20 秒了还一条能播的都没有，就不等了，直接去补搜
             withTimeoutOrNull(20_000) { own.join() }
@@ -288,7 +293,7 @@ object Lines {
             val why = needMore(t, set) ?: return@coroutineScope
             Log.i(TAG, "${t.name} · 补搜其它片源 ${cross.size} 站：$why")
             set.total += cross.size
-            withTimeoutOrNull(30_000) { run(cross) { worth(t, set, it) } }
+            withTimeoutOrNull(30_000) { run(cross) { l, sure -> worth(t, set, l, sure) } }
         }
         if (set.lines.isEmpty() && originErr != null) set.error = "「${SourceSearch.siteLabel(origin!!.first.name)}」打不开这部：$originErr"
         // 一条都没搜到、又是网络的问题：说网络不通，别说「站点里都没有」；有 error 下次进来马上重搜
@@ -333,7 +338,7 @@ object Lines {
                 line to Eps.LineInfo(line.episodes, name).also { it.sig }
             }
         }
-        for ((line, info) in built) if (set.lines.none { it.key == line.key }) { set.infos[line.key] = info; set.lines.add(line) }
+        for ((line, info) in built) if (set.lines.none { it.key == line.key }) { set.infos[line.key] = info; set.sure += line.key; set.lines.add(line) }
         if (built.isNotEmpty()) rerank(set)
         else return Result.failure(Exception(if (v.flags.isEmpty()) "站点没给播放地址（网盘类的要先登录网盘）" else "分集是空的"))
         return Result.success(v)
@@ -349,9 +354,26 @@ object Lines {
     // ---------------------------------------------------------------- 跨片源补搜
 
     /** 当前片源（不算跨源来的）能播的线路：没登录的网盘、播放失败过的不算 */
+    /**
+     * 剧集里没资料（站点没给年份、地区）的线路像不像同名的另一部：已经有资料对得上的线路，它却跟这些线路一集都对不上；
+     * 或者豆瓣说完结了，它的集数却多出一倍多。没有对得上的线路时不判断（没法比）。
+     */
+    internal fun stranger(t: Title, sures: List<PlayLine>, l: PlayLine): Boolean {
+        if (sures.isEmpty()) return false
+        if (!t.isVariety && !t.airing && t.totalEps > 1 && epCount(l, t) > t.totalEps * 2 + 2) return true
+        val keys = l.episodes.mapTo(HashSet()) { Eps.key(it.name, t.name) }
+        if (sures.any { v -> v.episodes.any { Eps.key(it.name, t.name) in keys } }) return false
+        // 名字写法不一样（「第1集」和「01」、带不带日期）：抽一些按同一集的规则再找
+        val step = (l.episodes.size + 39) / 40
+        val sample = l.episodes.filterIndexed { i, _ -> i % step.coerceAtLeast(1) == 0 }
+        return sures.none { v -> sample.any { e -> Eps.indexOf(v.episodes, e.name, t.name) >= 0 } }
+    }
+
     private fun baseLines(set: LineSet) = set.lines.filter { !it.siteKey.startsWith("x:") && !panLocked(it.flag) && it.key !in set.failed }
 
-    private fun epCount(l: PlayLine, t: Title) = if (t.isVariety) l.episodes.size else l.episodes.count { Eps.isNumber(it.name, t.name) }
+    /** 线路有几集：按序号的数「第 n 集」（夹着的花絮不算）；综艺、按名字分集的（纪录片「永不落幕的青春秀场」这种）数条数 */
+    private fun epCount(l: PlayLine, t: Title) =
+        if (t.isVariety || !Eps.numeric(l.episodes, t.name, t.isVariety)) l.episodes.size else l.episodes.count { Eps.isNumber(it.name, t.name) }
 
     private val LOW_Q = Regex("HDTC|HDTS|抢先|枪版|(?<![A-Za-z])(TC|TS|CAM)(?![A-Za-z])", RegexOption.IGNORE_CASE)
     private val Q4K = Regex("4K|2160|蓝光|原画|杜比|HDR", RegexOption.IGNORE_CASE)
@@ -375,6 +397,8 @@ object Lines {
     internal fun needMore(t: Title, set: LineSet): String? {
         val base = baseLines(set)
         if (base.isEmpty()) return "当前片源没有能直接播的线路"
+        // 都是没年份、地区的站搜到的：可能全是同名的另一部（「后会有期」2011 比利时片，当前片源只搜到 B 站同名视频）
+        if (base.none { it.key in set.sure }) return "当前片源的线路都对不上资料"
         val q = base.maxOf { quality(it) }
         if (q == 0) return "当前片源只有抢先版"
         if (t.isEpisodic) {
@@ -385,15 +409,16 @@ object Lines {
         return null
     }
 
-    /** 补搜到的线路值不值得加进来：当前片源没有能播的、集数更多、画质更好，才加 */
-    internal fun worth(t: Title, set: LineSet, l: PlayLine): Boolean {
+    /** 补搜到的线路值不值得加进来：当前片源没有能播的、资料对得上而当前片源一条对得上的都没有、集数更多、画质更好，才加 */
+    internal fun worth(t: Title, set: LineSet, l: PlayLine, sure: Boolean = false): Boolean {
         val base = baseLines(set)
         if (base.isEmpty()) return true
+        if (sure && base.none { it.key in set.sure }) return true
         if (quality(l) > base.maxOf { quality(it) }) return true
         return t.isEpisodic && epCount(l, t) > base.maxOf { epCount(it, t) }
     }
 
-    private suspend fun one(ctx: Context, cfg: TvConfig, s: SiteCfg, t: Title, q: String, set: LineSet, accept: (PlayLine) -> Boolean = { true }) {
+    private suspend fun one(ctx: Context, cfg: TvConfig, s: SiteCfg, t: Title, q: String, set: LineSet, accept: (PlayLine, Boolean) -> Boolean = { _, _ -> true }) {
         val alt = altQuery(t, q)
         // 插件的阻塞调用取消不了：超时就不等了，线程自己跑完
         val job = CoroutineScope(Dispatchers.IO).async {
@@ -412,25 +437,50 @@ object Lines {
             if (generateSequence(e) { it.cause }.take(5).any { it is java.io.IOException }) set.netErrors++
             null
         } ?: return
+        if (ctx.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) vods.forEach { v ->
+            Log.d("LinesDump", "vod ${s.name}|${v.name}|年=${v.year}|${v.typeName}|${v.area}|导=${v.director.take(30)}|演=${v.actor.take(40)}|${v.remarks}|${v.flags.joinToString { it.name + ":" + it.episodes.size }}")
+        }
+        // 详情里才有年份、地区的：再对一遍，对不上的是同名的另一部（比如同叫「后会有期」的美国电影和湖南卫视纪录片）
+        val checked = vods.mapNotNull { v ->
+            val c = Match.check(t.year, !t.isEpisodic, t.region, v.year, v.area)
+            if (c < 0) { Log.d(TAG, "${s.name}「${v.name}」${v.year} ${v.area}：不是这部"); null } else v to (c > 0)
+        }
         // 排序、拆分集名字（打分用）都是正则，几十条线路、每条上百集，放到后台算，别卡界面
         val built = withContext(Dispatchers.Default) {
-            vods.flatMap { v ->
+            checked.flatMap { (v, sure) ->
                 v.flags.filter { f ->
                     // 电影只要一集的来源；剧集的来源只有一集多半是预告
                     f.episodes.isNotEmpty() && !(!t.isEpisodic && f.episodes.size > 3) &&
                         !(t.isEpisodic && f.episodes.size == 1 && (t.totalEps > 1 || t.airedEps > 1))
                 }.map { f ->
                     val line = PlayLine(s.key, s.name, f.name, v.name, v.remarks, Eps.ascending(Eps.trimCommon(f.episodes), t.name))
-                    line to Eps.LineInfo(line.episodes, t.name).also { it.sig }
+                    Triple(line, Eps.LineInfo(line.episodes, t.name).also { it.sig }, sure)
                 }
             }
         }
         var added = false
-        for ((line, info) in built) {
-            if (set.lines.none { it.key == line.key } && accept(line)) {
-                added = true
-                set.infos[line.key] = info
-                set.lines.add(line)
+        var newSure = false
+        for ((line, info, sure) in built) {
+            if (set.lines.any { it.key == line.key } || !accept(line, sure)) continue
+            if (!sure && t.isEpisodic) {
+                val sures = set.lines.filter { it.key in set.sure }
+                if (withContext(Dispatchers.Default) { stranger(t, sures, line) }) { Log.d(TAG, "${s.name} · ${line.flag}：跟对得上的线路一集都不一样，不是这部"); continue }
+                if (set.lines.any { it.key == line.key }) continue
+            }
+            added = true
+            set.infos[line.key] = info
+            if (sure) { set.sure += line.key; newSure = true }
+            set.lines.add(line)
+        }
+        // 剧集：头一回有对得上的线路时，把先到的、没资料又跟它一集都对不上的线路拿掉
+        if (newSure && t.isEpisodic) {
+            val sures = set.lines.filter { it.key in set.sure }
+            val rest = set.lines.filter { it.key !in set.sure }
+            val odd = withContext(Dispatchers.Default) { rest.filter { stranger(t, sures, it) } }.map { it.key }.toSet()
+            if (odd.isNotEmpty()) {
+                Log.d(TAG, "${t.name} · 拿掉不是这部的 ${odd.size} 条：$odd")
+                set.lines.removeAll { it.key in odd }
+                odd.forEach { set.infos.remove(it) }
             }
         }
         if (added) rerank(set)

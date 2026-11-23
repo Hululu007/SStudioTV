@@ -65,4 +65,40 @@ object Match {
         if (doubanYear <= 0) return true
         return kotlin.math.abs(vy - doubanYear) <= if (isMovie) 1 else 2
     }
+
+    /**
+     * 站点给的年份、地区跟豆瓣比（名字已经对上了）：-1 对不上（同名的另一部），1 有资料而且对得上，0 站点没给资料。
+     * 很多插件搜索结果里没有年份，详情里才有，所以详情拿到以后要再比一次。
+     */
+    fun check(doubanYear: Int, isMovie: Boolean, doubanRegion: String, vodYear: String, vodArea: String): Int {
+        var ok = 0
+        val vy = Regex("(19|20)\\d{2}").find(vodYear)?.value?.toInt()
+        if (vy != null && doubanYear > 0) {
+            if (kotlin.math.abs(vy - doubanYear) > if (isMovie) 1 else 2) return -1
+            ok = 1
+        }
+        val a = regions(doubanRegion)
+        val b = regions(vodArea)
+        if (a.isNotEmpty() && b.isNotEmpty()) {
+            if (a.none { it in b }) return -1
+            ok = 1
+        }
+        return ok
+    }
+
+    /**
+     * 地区归成几大块再比：各站把合拍片、港台片标成「大陆」、把加拿大拍的美国片标成「加拿大」的很常见，分得太细会误伤。
+     * 认不出的（「欧美」以外的笼统写法、空的）返回空，不拿来比。
+     */
+    internal fun regions(s: String): Set<String> {
+        val r = HashSet<String>()
+        if (Regex("中国|大陆|内地|国产|香港|台湾|港台|华语|港剧|台剧").containsMatchIn(s)) r += "华语"
+        if (Regex("美国|英国|加拿大|澳大利亚|澳洲|新西兰|爱尔兰|欧美|美剧|英剧").containsMatchIn(s)) r += "英语"
+        if (Regex("法国|德国|西班牙|意大利|比利时|荷兰|丹麦|瑞典|挪威|芬兰|俄罗斯|波兰|瑞士|奥地利|葡萄牙|欧美|欧洲").containsMatchIn(s)) r += "欧洲"
+        if (Regex("日本|日韩|日剧").containsMatchIn(s)) r += "日本"
+        if (Regex("韩国|日韩|韩剧").containsMatchIn(s)) r += "韩国"
+        if (Regex("泰国|泰剧").containsMatchIn(s)) r += "泰国"
+        if ("印度" in s) r += "印度"
+        return r
+    }
 }
