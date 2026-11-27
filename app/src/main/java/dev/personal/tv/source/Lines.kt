@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import dev.personal.tv.data.Catalog
 import dev.personal.tv.data.Prefs
 import dev.personal.tv.data.Title
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -75,13 +76,20 @@ class LineSet(val titleId: String, val title: String = "") {
     internal val sure = HashSet<String>()
 }
 
+/** 不可中断的阻塞插件/网络调用共用的超时后台作用域：超时后取消作业，即使延迟抛异常也不会带崩主进程 */
+internal val bgIoScope = CoroutineScope(
+    SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e -> Log.w("BgIO", "uncaught", e) },
+)
+
 /**
  * 多源合并：拿豆瓣片名去配置里所有能搜索的站点搜，名字 + 季数 + 年份对得上的，每个播放来源算一条线路。
  * 同时最多 8 个站点，单站 15 秒，整体 45 秒；搜到一条显示一条，不等全部搜完。
  */
 object Lines {
     private const val TAG = "Lines"
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, e -> Log.w(TAG, "uncaught", e) },
+    )
     private val sets = mutableStateMapOf<String, LineSet>()
 
     fun get(id: String): LineSet? = sets[id]
@@ -335,12 +343,14 @@ object Lines {
 
     /** 来源站点的详情：每个播放来源都算一条线路，不按片名、集数筛 */
     private suspend fun fromOrigin(ctx: Context, cfg: TvConfig, s: SiteCfg, vodId: String, t: Title, set: LineSet): Result<Vod?> {
-        val job = CoroutineScope(Dispatchers.IO).async { Sites.get(ctx, cfg, s).detail(vodId) }
+        val job = bgIoScope.async { Sites.get(ctx, cfg, s).detail(vodId) }
         val v = try {
             withTimeoutOrNull(25_000) { job.await() } ?: return Result.failure(Exception("站点 25 秒没回应"))
         } catch (e: Throwable) {
             Log.d(TAG, "origin ${s.name}: ${e.message}")
             return Result.failure(e)
+        } finally {
+            job.cancel()
         }
         val name = v.name.ifBlank { t.name }
         val built = withContext(Dispatchers.Default) {
@@ -432,7 +442,7 @@ object Lines {
     private suspend fun one(ctx: Context, cfg: TvConfig, s: SiteCfg, t: Title, q: String, set: LineSet, accept: (PlayLine, Boolean) -> Boolean = { _, _ -> true }) {
         val alt = altQuery(t, q)
         // 插件的阻塞调用取消不了：超时就不等了，线程自己跑完
-        val job = CoroutineScope(Dispatchers.IO).async {
+        val job = bgIoScope.async {
             val api = Sites.get(ctx, cfg, s)
             fun ok(v: Vod) = Match.same(t.name, t.year, !t.isEpisodic, v.name, v.year) ||
                 (alt != null && Match.same(t.origName, t.year, !t.isEpisodic, v.name, v.year))
@@ -450,6 +460,8 @@ object Lines {
             Log.d(TAG, "${s.name}: ${e.message}")
             if (generateSequence(e) { it.cause }.take(5).any { it is java.io.IOException }) set.netErrors++
             null
+        } finally {
+            job.cancel()
         } ?: return
         if (ctx.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) vods.forEach { v ->
             Log.d("LinesDump", "vod ${s.name}|${v.name}|年=${v.year}|${v.typeName}|${v.area}|导=${v.director.take(30)}|演=${v.actor.take(40)}|${v.remarks}|${v.flags.joinToString { it.name + ":" + it.episodes.size }}")

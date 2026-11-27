@@ -137,9 +137,15 @@ object ConfigLoader {
 
     private fun aesCbc(hex: String): String {
         val txt = String(hex2bytes(hex), Charsets.ISO_8859_1).lowercase()
-        val key = pad(txt.substring(txt.indexOf("$#") + 2, txt.indexOf("#$")))
+        val kStart = txt.indexOf("$#")
+        val kEnd = txt.indexOf("#$", kStart + 2)
+        val dStart = hex.indexOf("2324")
+        require(kStart >= 0 && kEnd > kStart + 2 && txt.length >= 13 && dStart >= 0 && hex.length >= dStart + 4 + 26) {
+            "invalid encrypted config"
+        }
+        val key = pad(txt.substring(kStart + 2, kEnd))
         val iv = pad(txt.substring(txt.length - 13))
-        val data = hex.substring(hex.indexOf("2324") + 4, hex.length - 26)
+        val data = hex.substring(dStart + 4, hex.length - 26)
         val c = Cipher.getInstance("AES/CBC/PKCS5Padding")
         c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key.toByteArray(), "AES"), IvParameterSpec(iv.toByteArray()))
         return String(c.doFinal(hex2bytes(data)), Charsets.UTF_8)
@@ -155,14 +161,19 @@ object ConfigLoader {
         val reader = JsonReader(StringReader(text)).apply { isLenient = true }
         val o = JsonParser.parseReader(reader).asJsonObject
         val (spider, md5) = splitMd5(o.str("spider"))
+        val usedKeys = HashSet<String>()
         return TvConfig(
             url = url,
             spider = spider?.let { resolve(url, it) },
             spiderMd5 = md5,
-            sites = o.arr("sites").mapNotNull { it.obj() }.map { s ->
+            sites = o.arr("sites").mapNotNull { it.obj() }.mapIndexed { idx, s ->
                 val ext = s.get("ext")
+                val baseKey = (s.str("key") ?: s.str("name")).orEmpty().ifBlank { "site_$idx" }
+                var uniqKey = baseKey
+                var seq = 2
+                while (!usedKeys.add(uniqKey)) uniqKey = "$baseKey#${seq++}"
                 SiteCfg(
-                    key = s.str("key") ?: s.str("name").orEmpty(),
+                    key = uniqKey,
                     name = s.str("name").orEmpty(),
                     type = s.int("type", 0),
                     api = s.str("api").orEmpty(),
@@ -171,7 +182,7 @@ object ConfigLoader {
                         ext.isJsonPrimitive -> ext.asString.let { if (it.startsWith("./") || it.startsWith("../")) resolve(url, it) else it }
                         else -> ext.toString()
                     },
-                    jar = s.str("jar")?.let { resolve(url, splitMd5(it).first!!) },
+                    jar = splitMd5(s.str("jar")).first?.let { resolve(url, it) },
                     searchable = s.int("searchable", 1) != 0,
                     quickSearch = s.int("quickSearch", 1) != 0,
                     timeout = s.int("timeout", 15),

@@ -57,11 +57,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Request
@@ -162,6 +162,7 @@ class PlaySession(
 
     private var cfg: TvConfig? = null
     private var job: Job? = null
+    private var tickJob: Job? = null
     private var rendered = false
     private var ready: CompletableDeferred<Boolean>? = null
     private var startupVideoError = false
@@ -274,7 +275,7 @@ class PlaySession(
             pinned = prev?.line != null
             start(startEp, startMs, prev?.line)
         }
-        scope.launch {
+        tickJob = scope.launch {
             var tick = 0
             while (true) {
                 delay(500)
@@ -506,6 +507,8 @@ class PlaySession(
         save()
         hungry = false
         MediaCache.playerHungry(this, false)
+        tickJob?.cancel()
+        tickJob = null
         job?.cancel()
         stopPrefetch()
         player.release()
@@ -676,8 +679,10 @@ class PlaySession(
         status = "正在打开上次的线路 · ${r.siteName}"
         return try {
             val vod = Lines.yieldTo {
-                val detail = scope.async(Dispatchers.IO) { Sites.get(ctx, c, s).detail(r.vodId) }
-                try { withTimeoutOrNull(COLD_S * 1000L) { detail.await() } } finally { detail.cancel() }
+                supervisorScope {
+                    val detail = async(Dispatchers.IO) { Sites.get(ctx, c, s).detail(r.vodId) }
+                    try { withTimeoutOrNull(COLD_S * 1000L) { detail.await() } } finally { detail.cancel() }
+                }
             }
             ColdResume.buildLine(r, vod, t.name).also { Log.i(TAG, "冷启动 ${r.siteKey}|${r.flag}：${if (it != null) "取到 ${it.episodes.size} 集" else "没取到，走完整搜索"}") }
         } catch (x: kotlinx.coroutines.CancellationException) {
@@ -809,8 +814,8 @@ class PlaySession(
         player.setPlaybackSpeed(speed)
         player.prepare()
         player.playWhenReady = !hidden
-        val ok = withTimeoutOrNull(READY_S * 1000L) { r.await() } ?: false
-        ready = null
+        val ok = try { withTimeoutOrNull(READY_S * 1000L) { r.await() } ?: false }
+        finally { if (ready === r) ready = null }
         if (!ok) {
             Log.i(TAG, "✗ 本地 ${m.epName}")
             set.failed[l.key] = "本地文件放不了"
@@ -840,7 +845,16 @@ class PlaySession(
     private suspend fun prefetch() {
         // PriorityTaskManager 只放行「登记过的最高优先级」：自己不登记的话一直等下去
         MediaCache.priority.add(C.PRIORITY_DOWNLOAD)
-        try { prefetchBody() } finally { MediaCache.priority.remove(C.PRIORITY_DOWNLOAD) }
+        try {
+            prefetchBody()
+        } catch (x: kotlinx.coroutines.CancellationException) {
+            throw x
+        } catch (x: Throwable) {
+            Log.w(TAG, "prefetch 异常，已停", x)
+            prefetchText = null
+        } finally {
+            MediaCache.priority.remove(C.PRIORITY_DOWNLOAD)
+        }
     }
 
     private suspend fun prefetchBody() {
@@ -891,9 +905,17 @@ class PlaySession(
         prefetchText = "下一集 0%"
         val job = kotlin.coroutines.coroutineContext[Job]
         val h = job?.invokeOnCompletion { d.cancel() }
+        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        var lastPct = -1
         try {
             runInterruptible(Dispatchers.IO) {
-                d.download { _, _, pct -> if (pct >= 0) prefetchText = "下一集 ${pct.toInt()}%" }
+                d.download { _, _, pct ->
+                    val p = pct.toInt()
+                    if (p >= 0 && p != lastPct) {
+                        lastPct = p
+                        mainHandler.post { if (prefetchJob?.isActive == true) prefetchText = "下一集 $p%" }
+                    }
+                }
             }
             prefetchText = "下一集已缓存好"
             Log.i(TAG, "prefetch: 下一集「${e.name}」缓存好了")
@@ -910,7 +932,7 @@ class PlaySession(
     /**
      * 存一个分片；播放器缺缓冲时先等它。30 秒一个字节都没进来就放弃这一片（别让预缓存卡死在一个分片上）。
      */
-    private suspend fun cacheOne(f: androidx.media3.datasource.cache.CacheDataSource.Factory, spec: DataSpec): Boolean = coroutineScope {
+    private suspend fun cacheOne(f: androidx.media3.datasource.cache.CacheDataSource.Factory, spec: DataSpec): Boolean = supervisorScope {
         val last = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
         val got = java.util.concurrent.atomic.AtomicLong(0)
         val yielding = java.util.concurrent.atomic.AtomicBoolean(false)

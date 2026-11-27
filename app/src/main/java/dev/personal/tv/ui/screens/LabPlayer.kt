@@ -141,6 +141,7 @@ fun LabPlayer(r: Route.LabPlay) {
                     keepScreenOn = true
                 }
             },
+            onRelease = { it.player = null },
             modifier = Modifier.fillMaxSize(),
         )
         if (state.isNotBlank() && error == null) {

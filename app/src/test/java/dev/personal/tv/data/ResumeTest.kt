@@ -45,4 +45,11 @@ class ResumeTest {
         assertEquals("第08集", tg.name)
         assertEquals(8, tg.ep)
     }
+
+    @Test fun progressFractionClamped() {
+        assertEquals(0f, Progress("a", 1, -10, 100, 0).fraction, 1e-6f)
+        assertEquals(0f, Progress("a", 1, 50, 0, 0).fraction, 1e-6f)
+        assertEquals(1f, Progress("a", 1, 500, 100, 0).fraction, 1e-6f)
+        assertEquals(0.5f, Progress("a", 1, 50, 100, 0).fraction, 1e-6f)
+    }
 }

@@ -18,7 +18,9 @@ import java.net.NetworkInterface
 object Remote {
     private const val TAG = "Remote"
     private var server: Server? = null
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main.immediate + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> Log.w(TAG, "uncaught", e) },
+    )
     private val token = (1..6).map { "abcdefghjkmnpqrstuvwxyz23456789".random() }.joinToString("")
 
     /** 手机该打开的地址；没联网或没起来是 null */

@@ -9,6 +9,7 @@ import android.content.ServiceConnection
 import android.os.Build
 import android.os.DeadObjectException
 import android.os.IBinder
+import android.os.RemoteException
 import android.util.Log
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -31,15 +32,25 @@ object SpiderClient {
     private val conn = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, b: IBinder) {
             host = ISpiderHost.Stub.asInterface(b)
-            b.linkToDeath({
+            val linked = runCatching {
+                b.linkToDeath({
+                    host = null
+                    latch = CountDownLatch(1)
+                    Thread({
+                        runCatching { Thread.sleep(500) } // 退出原因要等系统记下来
+                        val why = exitReason()
+                        Log.w(TAG, "spider process died: $why")
+                        onDeath?.invoke(why)
+                        rebind()
+                    }, "spider-rebind").start()
+                }, 0)
+            }.isSuccess
+            if (!linked) {
                 host = null
                 latch = CountDownLatch(1)
-                Thread.sleep(500) // 退出原因要等系统记下来
-                val why = exitReason()
-                Log.w(TAG, "spider process died: $why")
-                onDeath?.invoke(why)
-                rebind()
-            }, 0)
+                Thread({ rebind() }, "spider-rebind").start()
+                return
+            }
             latch.countDown()
         }
 
@@ -88,15 +99,19 @@ object SpiderClient {
     }
 
     fun call(jar: String, md5: String?, key: String, api: String, ext: String, method: String, vararg args: String): String {
-        val r = try {
+        val r: String? = try {
             host().call(jar, md5.orEmpty(), key, api, ext, method, args.toList())
         } catch (e: DeadObjectException) {
             host = null
             error("插件进程退出了（插件崩溃或自行结束）")
+        } catch (e: RemoteException) {
+            Log.w(TAG, "IPC 失败 $key.$method", e)
+            error("插件通信失败：${e.javaClass.simpleName}")
         }
+        if (r == null) error("插件没有返回结果")
         return when (r.firstOrNull()) {
             '0' -> r.substring(1)
-            'F' -> File(r.substring(1)).let { f -> f.readText().also { f.delete() } }
+            'F' -> File(r.substring(1)).let { f -> try { f.readText() } finally { f.delete() } }
             else -> error(r.drop(1))
         }
     }

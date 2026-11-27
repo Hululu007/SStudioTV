@@ -239,6 +239,7 @@ fun PlayerScreen(r: Route.Player) {
             },
             // 真在播（含缓冲）时不让电视进屏保；暂停、播完、出错、问「还在看吗」时随它
             update = { it.keepScreenOn = ps.awake },
+            onRelease = { it.player = null },
             modifier = Modifier.fillMaxSize(),
         )
         // 还没出画面时：模糊海报 + 提示

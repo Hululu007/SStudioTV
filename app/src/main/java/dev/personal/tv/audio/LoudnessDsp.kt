@@ -44,19 +44,25 @@ class LoudnessDsp(val sampleRate: Int, val channels: Int) {
     private var agcDb = 0.0
     private var limGain = 1.0
 
-    // 峰值 EQ 双二阶（每声道一份状态）
+    // 峰值 EQ 双二阶（每声道一份状态）；采样率低于 8 kHz 时跳过对白 EQ，免得 2.5 kHz 逼近奈奎斯特频率导致发散
+    private val canDialog = sampleRate >= 8000
     private val b0: Double; private val b1: Double; private val b2: Double; private val a1: Double; private val a2: Double
     private val z1 = DoubleArray(channels)
     private val z2 = DoubleArray(channels)
 
     init {
-        val f0 = 2500.0; val q = 0.8; val gainDb = 5.0
-        val a = 10.0.pow(gainDb / 40)
-        val w = 2 * Math.PI * f0 / sampleRate
-        val alpha = sin(w) / (2 * q)
-        val a0 = 1 + alpha / a
-        b0 = (1 + alpha * a) / a0; b1 = -2 * cos(w) / a0; b2 = (1 - alpha * a) / a0
-        a1 = -2 * cos(w) / a0; a2 = (1 - alpha / a) / a0
+        require(sampleRate > 0 && channels > 0) { "invalid audio format: $sampleRate Hz, $channels ch" }
+        if (canDialog) {
+            val f0 = 2500.0; val q = 0.8; val gainDb = 5.0
+            val a = 10.0.pow(gainDb / 40)
+            val w = 2 * Math.PI * f0 / sampleRate
+            val alpha = sin(w) / (2 * q)
+            val a0 = 1 + alpha / a
+            b0 = (1 + alpha * a) / a0; b1 = -2 * cos(w) / a0; b2 = (1 - alpha * a) / a0
+            a1 = -2 * cos(w) / a0; a2 = (1 - alpha / a) / a0
+        } else {
+            b0 = 1.0; b1 = 0.0; b2 = 0.0; a1 = 0.0; a2 = 0.0
+        }
     }
 
     fun reset() {
@@ -68,28 +74,33 @@ class LoudnessDsp(val sampleRate: Int, val channels: Int) {
     val agcGainDb get() = agcDb
 
     fun process(buf: FloatArray, frames: Int) {
-        val lv = level; val nt = night; val dl = dialog
+        val lv = level; val nt = night; val dl = dialog && canDialog
         if (!lv && !nt && !dl) { limGain = 1.0; return }
         val c = channels
         for (f in 0 until frames) {
             val o = f * c
             var ms = 0.0
             for (ch in 0 until c) {
-                var x = buf[o + ch].toDouble()
+                val raw = buf[o + ch]
+                var x = if (raw.isFinite()) raw.toDouble() else 0.0
                 if (dl) {
                     val y = b0 * x + z1[ch]
                     z1[ch] = b1 * x - a1 * y + z2[ch]
                     z2[ch] = b2 * x - a2 * y
-                    x = y
+                    x = if (y.isFinite()) y else 0.0
                     buf[o + ch] = x.toFloat()
+                } else if (!raw.isFinite()) {
+                    buf[o + ch] = 0f
                 }
                 ms += x * x
             }
             ms /= c
+            if (!ms.isFinite()) ms = 0.0
 
             var gDb = 0.0
             if (lv) {
                 if (ms > DB_GATE) slowEnv = slow * slowEnv + (1 - slow) * ms
+                if (!slowEnv.isFinite() || slowEnv <= 0.0) slowEnv = 10.0.pow(-20.0 / 10)
                 val want = (targetDb - 10 * log10(slowEnv)).coerceIn(agcMinDb, agcMaxDb)
                 agcDb += (want - agcDb).coerceIn(-agcStep, agcStep)
                 gDb += agcDb
@@ -97,6 +108,7 @@ class LoudnessDsp(val sampleRate: Int, val channels: Int) {
             if (nt) {
                 val a = if (ms > env) atk else rel
                 env = a * env + (1 - a) * ms
+                if (!env.isFinite() || env < 0.0) env = 1e-6
                 val inDb = 10 * log10(env + 1e-12) + gDb
                 if (inDb > compThreshDb) gDb -= (inDb - compThreshDb) * (1 - 1 / compRatio)
                 gDb += compMakeupDb
@@ -104,10 +116,17 @@ class LoudnessDsp(val sampleRate: Int, val channels: Int) {
             val g = if (gDb == 0.0) 1.0 else 10.0.pow(gDb / 20)
 
             var peak = 0.0
-            for (ch in 0 until c) peak = max(peak, abs(buf[o + ch] * g))
-            limGain = if (peak * limGain > ceiling) ceiling / peak else min(1.0, limGain / limRel)
+            for (ch in 0 until c) {
+                val v = abs(buf[o + ch] * g)
+                if (v.isFinite()) peak = max(peak, v)
+            }
+            limGain = if (peak > 0.0 && peak * limGain > ceiling) ceiling / peak else min(1.0, limGain / limRel)
+            if (!limGain.isFinite() || limGain <= 0.0) limGain = 1.0
             val t = g * limGain
-            for (ch in 0 until c) buf[o + ch] = (buf[o + ch] * t).toFloat().coerceIn(-1f, 1f)
+            for (ch in 0 until c) {
+                val out = (buf[o + ch] * t).toFloat()
+                buf[o + ch] = if (out.isFinite()) out.coerceIn(-1f, 1f) else 0f
+            }
         }
     }
 

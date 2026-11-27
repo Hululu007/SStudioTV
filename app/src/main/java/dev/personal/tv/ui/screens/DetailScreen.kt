@@ -46,7 +46,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
@@ -158,13 +157,12 @@ fun DetailScreen(r: Route.Detail) {
         val pageH = maxHeight
         val pagePx = with(LocalDensity.current) { pageH.toPx() }
 
-        // 背景：海报模糊放大，所有片子效果一致
+        // 背景：低分辨率海报放大模糊，避免 4K 电视整屏 RenderEffect 占大内存
         Backdrop(
             t,
             Modifier.fillMaxSize()
-                .graphicsLayer { scaleX = 1.3f; scaleY = 1.3f; alpha = 0.55f }
-                .blur(40.dp),
-            silhouette = false, alignment = Alignment.Center,
+                .graphicsLayer { scaleX = 1.25f; scaleY = 1.25f; alpha = 0.55f },
+            silhouette = false, alignment = Alignment.Center, soft = true,
         )
 
         // 字放大以后简介、按钮变高：分集那一行跟在按钮下面，不压上去
@@ -289,7 +287,8 @@ private fun DoubanBox(t: Title, modifier: Modifier) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     T(l, 7.5.sp, Palette.T3)
                     Box(Modifier.size(75.dp, 3.dp).background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(2.dp))) {
-                        Box(Modifier.size(75.dp * f, 3.dp).background(Palette.Star, RoundedCornerShape(2.dp)))
+                        val bar = if (f.isFinite()) f.coerceIn(0f, 1f) else 0f
+                        Box(Modifier.size(75.dp * bar, 3.dp).background(Palette.Star, RoundedCornerShape(2.dp)))
                     }
                 }
             }

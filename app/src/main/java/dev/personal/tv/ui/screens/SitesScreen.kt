@@ -31,7 +31,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -125,11 +125,15 @@ internal fun SitePage.load(ctx: Context, scope: CoroutineScope, s: SiteCfg, c: S
         try {
             val cfg = Sources.config()
             // 插件的阻塞调用取消不了：超时就不等了
-            val job = CoroutineScope(Dispatchers.IO).async {
+            val job = dev.personal.tv.source.bgIoScope.async {
                 val api = Sites.get(ctx.applicationContext, cfg, s)
                 if (c == HOME) api.home() else api.category(c, p.page + 1)
             }
-            val got = withTimeoutOrNull(25_000) { job.await() } ?: error("站点 25 秒没回应")
+            val got = try {
+                withTimeoutOrNull(25_000) { job.await() } ?: error("站点 25 秒没回应")
+            } finally {
+                job.cancel()
+            }
             if (c == HOME) p.classes = got.classes
             if (p.ratio == null) p.ratio = got.ratio ?: got.list.firstNotNullOfOrNull { it.ratio }
             val have = p.items.map { it.id }.toHashSet()
@@ -241,7 +245,7 @@ fun SitesScreen(mem: FocusMemory) {
                 }
                 if (list == null) item(key = "\u0000wait") {
                     T(err ?: "正在加载…", 10.sp, Palette.T3, lines = 4, modifier = Modifier.padding(start = 10.dp))
-                } else items(list, key = { it.key }) { s ->
+                } else itemsIndexed(list, key = { i, s -> "$i:${s.key}" }) { _, s ->
                     val on = s.key == site?.key
                     if (on) Shown()
                     SiteItem(
@@ -270,7 +274,7 @@ fun SitesScreen(mem: FocusMemory) {
                     item(key = HOME) {
                         Chip("首页", cls == HOME, { cls = HOME }, Modifier.remembered(mem, "cls:$HOME").then(if (cls == HOME) Modifier.focusRequester(clsReq) else Modifier), size = 11.sp, height = 22.dp, idleBg = Color.White.copy(alpha = 0.08f))
                     }
-                    items(classes, key = { "c:" + it.id }) { c ->
+                    itemsIndexed(classes, key = { i, c -> "c:$i:${c.id}" }) { _, c ->
                         Chip(c.name, cls == c.id, { cls = c.id }, Modifier.remembered(mem, "cls:${c.id}").then(if (cls == c.id) Modifier.focusRequester(clsReq) else Modifier), size = 11.sp, height = 22.dp, idleBg = Color.White.copy(alpha = 0.08f))
                     }
                 }
@@ -304,7 +308,7 @@ fun SitesScreen(mem: FocusMemory) {
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                         verticalArrangement = Arrangement.spacedBy(18.dp),
                     ) {
-                        itemsIndexed(page.items, key = { _, it -> it.id }) { i, t ->
+                        itemsIndexed(page.items, key = { i, it -> "$i:${it.id}" }) { i, t ->
                             val dir = page.folders[t.id]
                             val act = page.actions[t.id]
                             PosterCell(

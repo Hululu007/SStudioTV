@@ -41,12 +41,11 @@ object ConfigPreview {
      * 阻塞的网络调用没法被取消：超时 / 返回键后不再等它（okhttp 自带 callTimeout，最多 30 秒内线程自己结束），结果直接丢掉。
      */
     private suspend fun <T> bounded(ms: Long, block: () -> T): T {
-        val job = CoroutineScope(Dispatchers.IO).async { block() }
-        try {
-            return withTimeout(ms) { job.await() }
-        } catch (e: Throwable) {
+        val job = bgIoScope.async { block() }
+        return try {
+            withTimeout(ms) { job.await() }
+        } finally {
             job.cancel()
-            throw e
         }
     }
 }

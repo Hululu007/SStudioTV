@@ -150,14 +150,23 @@ fun Landscape(
     }
 }
 
-/** 模糊背景（详情页、播放器加载时）：海报裁成横图，上面再盖各页面自己的遮罩 */
+/** 模糊背景（详情页、播放器加载时）：海报裁成横图，上面再盖各页面自己的遮罩。[soft] 用低分辨率放大做柔和模糊，避免 4K 电视上整屏 RenderEffect 占大内存 */
 @Composable
-fun Backdrop(t: Title, modifier: Modifier = Modifier, silhouette: Boolean = true, alignment: Alignment = Alignment.TopCenter) {
+fun Backdrop(t: Title, modifier: Modifier = Modifier, silhouette: Boolean = true, alignment: Alignment = Alignment.TopCenter, soft: Boolean = false) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     Box(modifier.art(t.art, silhouette)) {
         if (t.poster != null) {
+            val model: Any = if (soft) {
+                remember(t.poster) {
+                    coil.request.ImageRequest.Builder(ctx).data(t.poster).size(24, 36)
+                        .memoryCacheKey("soft:${t.poster}").build()
+                }
+            } else t.poster
             AsyncImage(
-                model = t.poster, contentDescription = null, contentScale = ContentScale.Crop,
-                alignment = alignment, modifier = Modifier.fillMaxSize(),
+                model = model, contentDescription = null, contentScale = ContentScale.Crop,
+                alignment = alignment,
+                filterQuality = if (soft) androidx.compose.ui.graphics.FilterQuality.High else androidx.compose.ui.graphics.FilterQuality.Low,
+                modifier = Modifier.fillMaxSize(),
             )
         }
     }

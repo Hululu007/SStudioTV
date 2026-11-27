@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -139,19 +140,22 @@ class PluginSettingsActivity : ComponentActivity() {
         var note by remember { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         val first = remember { FocusRequester() }
-        /** 从左栏按 → 进右栏的第一项（不然会落到同一高度的「清除账号」之类上） */
+        /** 从左栏按 → 进右栏的第一项（不然会落到同一高度的「清除账号」之类上）；第一项滑出视口时交回默认焦点 */
         val right = remember { FocusRequester() }
-        val toRight = Modifier.focusProperties { this.right = if (items.isNotEmpty()) right else FocusRequester.Default }
+        var rightAttached by remember { mutableStateOf(false) }
+        val toRight = Modifier.focusProperties { this.right = if (rightAttached) right else FocusRequester.Default }
 
         LaunchedEffect(Unit) {
-            withContext(Dispatchers.IO) {
+            val r = withContext(Dispatchers.IO) {
                 runCatching {
                     val s = load()
-                    val p = VodJson.page(s.homeContent(true).orEmpty())
-                    sp = s; classes = p.classes; home = p.list
-                    cls = startCls?.takeIf { c -> p.classes.any { it.id == c } } ?: if (p.list.isEmpty()) p.classes.firstOrNull()?.id else null
-                }.onFailure { err = "插件打不开：${it.message?.take(80)}"; Log.w(TAG, "load", it) }
+                    s to VodJson.page(s.homeContent(true).orEmpty())
+                }
             }
+            r.onSuccess { (s, p) ->
+                sp = s; classes = p.classes; home = p.list
+                cls = startCls?.takeIf { c -> p.classes.any { it.id == c } } ?: if (p.list.isEmpty()) p.classes.firstOrNull()?.id else null
+            }.onFailure { err = "插件打不开：${it.message?.take(80)}"; Log.w(TAG, "load", it) }
         }
         // 切分类、对话框关掉回来时重读
         LaunchedEffect(sp, cls, focusTick) {
@@ -214,8 +218,8 @@ class PluginSettingsActivity : ComponentActivity() {
                     if (home.isNotEmpty()) item {
                         Row1("总览", null, cls == null, toRight.focusRequester(first), onFocus = { cls = null }) { cls = null }
                     }
-                    items(classes, key = { it.id }) { c ->
-                        Row1(c.name, null, cls == c.id, if (home.isEmpty() && c == classes.first()) toRight.focusRequester(first) else toRight, onFocus = { cls = c.id }) { cls = c.id }
+                    itemsIndexed(classes, key = { i, c -> "$i:${c.id}" }) { i, c ->
+                        Row1(c.name, null, cls == c.id, if (home.isEmpty() && i == 0) toRight.focusRequester(first) else toRight, onFocus = { cls = c.id }) { cls = c.id }
                     }
                 }
             }
@@ -225,7 +229,15 @@ class PluginSettingsActivity : ComponentActivity() {
                     sp == null -> T("正在加载插件…", 13.sp, Palette.T2)
                     items.isEmpty() -> T("这一栏是空的", 12.sp, Palette.T3)
                     else -> LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        items(items, key = { it.id }) { v -> Row1(v.name, v.remarks, false, if (v == items.first()) Modifier.focusRequester(right) else Modifier) { open(v) } }
+                        itemsIndexed(items, key = { i, v -> "$i:${v.id}" }) { i, v ->
+                            if (i == 0) {
+                                androidx.compose.runtime.DisposableEffect(cls) {
+                                    rightAttached = true
+                                    onDispose { rightAttached = false }
+                                }
+                            }
+                            Row1(v.name, v.remarks, false, if (i == 0) Modifier.focusRequester(right) else Modifier) { open(v) }
+                        }
                     }
                 }
                 if (note.isNotBlank()) T(note, 10.5.sp, Palette.T2, lines = 4, modifier = Modifier.padding(top = 10.dp, start = 12.dp))
@@ -263,7 +275,7 @@ class PluginSettingsActivity : ComponentActivity() {
                 !loaded -> Empty("正在加载插件…")
                 items.isEmpty() -> Empty("这一栏是空的")
                 else -> LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
-                    items(items, key = { it.id }) { v ->
+                    itemsIndexed(items, key = { i, v -> "$i:${v.id}" }) { _, v ->
                         Row(
                             Modifier.fillMaxWidth().clickable(enabled = !busy) { open(v) }.padding(horizontal = PC.Edge, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,

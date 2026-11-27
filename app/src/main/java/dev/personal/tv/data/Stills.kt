@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -51,8 +52,11 @@ object Stills {
                 // 焦点快速划过时不查：停留一会儿还在才查
                 delay(150)
                 val url = gate.withPermit { Douban.still(t.id, t.dtype) }
-                map[t.id] = url.orEmpty()
-                save()
+                val snap = withContext(Dispatchers.Main) {
+                    map[t.id] = url.orEmpty()
+                    HashMap(map)
+                }
+                save(snap)
             } catch (e: Throwable) {
                 // 网络失败、被限流：这次不记，下次显示时再查
                 Log.d(TAG, "${t.name}: ${e.message}")
@@ -63,8 +67,8 @@ object Stills {
     }
 
     @Synchronized
-    private fun save() {
+    private fun save(snap: Map<String, String>) {
         val f = file ?: return
-        runCatching { saveJson(f, HashMap(map)) }.onFailure { Log.w(TAG, "save", it) }
+        runCatching { saveJson(f, snap) }.onFailure { Log.w(TAG, "save", it) }
     }
 }

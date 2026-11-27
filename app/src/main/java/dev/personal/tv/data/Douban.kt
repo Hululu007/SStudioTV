@@ -93,7 +93,7 @@ object Douban {
      * 没有横的返回 null。不走磁盘缓存：结果（一个地址）由 [Stills] 存。
      */
     fun still(id: String, dtype: String): String? {
-        val photos = get("$API/$dtype/$id/photos", mapOf("start" to "0", "count" to "40")).asJsonObject.arr("photos")
+        val photos = get("$API/$dtype/$id/photos", mapOf("start" to "0", "count" to "40")).obj()?.arr("photos").orEmpty()
             .mapNotNull { it.obj()?.obj("image")?.obj("large") }
         fun pick(minW: Int) = photos.firstOrNull { l ->
             val w = l.int("width") ?: 0
@@ -105,7 +105,7 @@ object Douban {
 
     /** 最近热门：type = tv / movie */
     fun recentHot(type: String, limit: Int = 30): List<Title> =
-        get("$API/subject/recent_hot/$type", mapOf("start" to "0", "limit" to "$limit"), ttl = 10 * MIN).asJsonObject.arr("items").mapNotNull { item(it.obj(), type) }
+        get("$API/subject/recent_hot/$type", mapOf("start" to "0", "limit" to "$limit"), ttl = 10 * MIN).obj()?.arr("items").orEmpty().mapNotNull { item(it.obj(), type) }
 
     /**
      * 选片：tags 是逗号分隔的筛选（「悬疑,华语,2020年代」），sort：U 近期热度 / T 综合 / S 高分 / R 首播时间
@@ -114,7 +114,7 @@ object Douban {
         val q = mutableMapOf("start" to "$start", "count" to "$count", "sort" to sort, "tags" to tags.joinToString(","))
         if (minScore > 0f) q["score_range"] = "$minScore,10"
         val ttl = if (cache) 6 * HOUR else 0
-        return get("$API/$type/recommend", q, ttl, stale = true).asJsonObject.arr("items")
+        return get("$API/$type/recommend", q, ttl, stale = true).obj()?.arr("items").orEmpty()
             .mapNotNull { it.obj() }.filter { it.str("type") == null || it.str("type") == "tv" || it.str("type") == "movie" }
             .mapNotNull { item(it, type) }
     }
@@ -149,7 +149,7 @@ object Douban {
      * card_subtitle 是「地区 / 类型 / 导演 / 主演」，没类型的条目第二段是演员，按类型表过滤。
      */
     fun search(q: String): List<Title> =
-        get("$API/search/movie", mapOf("q" to q, "count" to "20"), ttl = DAY).asJsonObject.arr("items").mapNotNull { e ->
+        get("$API/search/movie", mapOf("q" to q, "count" to "20"), ttl = DAY).obj()?.arr("items").orEmpty().mapNotNull { e ->
             val o = e.obj() ?: return@mapNotNull null
             val type = o.str("target_type")?.takeIf { it == "movie" || it == "tv" } ?: return@mapNotNull null
             val t = o.obj("target") ?: return@mapNotNull null
@@ -176,7 +176,7 @@ object Douban {
     /** 详情。/movie/{id} 对剧集会 302 到 /tv/{id}，所以类型猜错也没关系 */
     /** [maxAge]：缓存最多用多久。连载中的剧传短的，过期就当场重拉（拉不到还用旧的） */
     fun detail(id: String, dtype: String, maxAge: Long = 3 * DAY): Title {
-        val o = get("$API/$dtype/$id", ttl = maxAge, stale = maxAge >= DAY).asJsonObject
+        val o = get("$API/$dtype/$id", ttl = maxAge, stale = maxAge >= DAY).obj() ?: error("豆瓣详情格式异常")
         val type = o.str("type") ?: dtype
         val genres = o.arr("genres").mapNotNull { it.s() }
         val rating = o.obj("rating")
@@ -213,8 +213,8 @@ object Douban {
 
     /** 想看 / 在看 / 看过人数、星级分布、「好于 x% 某类片」 */
     fun rating(t: Title): Heat {
-        val o = get("$API/${t.dtype}/${t.id}/rating", ttl = DAY, stale = true).asJsonObject
-        val stats = o.arr("stats").mapNotNull { runCatching { it.asFloat }.getOrNull() }
+        val o = get("$API/${t.dtype}/${t.id}/rating", ttl = DAY, stale = true).obj() ?: error("豆瓣评分格式异常")
+        val stats = o.arr("stats").mapNotNull { runCatching { it.asFloat }.getOrNull()?.takeIf { f -> f.isFinite() } }
         val rank = o.arr("type_ranks").mapNotNull { it.obj() }.maxByOrNull { it.float("rank") ?: 0f }
         val better = rank?.let { r ->
             val pct = ((r.float("rank") ?: 0f) * 100).toInt()

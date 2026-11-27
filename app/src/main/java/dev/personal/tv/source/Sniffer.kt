@@ -62,51 +62,56 @@ object Sniffer {
             cont.invokeOnCancellation { finish(null) }
             main.post {
                 if (done.get()) return@post
-                val ua = headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: UA
-                val w = WebView(ctx.applicationContext)
-                wv = w
-                w.settings.apply {
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
-                    mediaPlaybackRequiresUserGesture = false
-                    blockNetworkImage = true
-                    userAgentString = ua
-                    mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                }
-                w.webViewClient = object : WebViewClient() {
-                    /** 当前页面地址。shouldInterceptRequest 在后台线程，不能调 view.url（WebView 只能在主线程用，调了整个 App 崩） */
-                    @Volatile var page = pageUrl
-
-                    override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
-                        if (url != null) page = url
+                try {
+                    val ua = headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: UA
+                    val w = WebView(ctx.applicationContext)
+                    wv = w
+                    w.settings.apply {
+                        javaScriptEnabled = true
+                        domStorageEnabled = true
+                        mediaPlaybackRequiresUserGesture = false
+                        blockNetworkImage = true
+                        userAgentString = ua
+                        mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                     }
+                    w.webViewClient = object : WebViewClient() {
+                        /** 当前页面地址。shouldInterceptRequest 在后台线程，不能调 view.url（WebView 只能在主线程用，调了整个 App 崩） */
+                        @Volatile var page = pageUrl
 
-                    override fun shouldInterceptRequest(view: WebView, req: WebResourceRequest): WebResourceResponse? {
-                        val url = req.url.toString()
-                        val host = req.url.host.orEmpty()
-                        if (ads.any { it.isNotBlank() && (host == it || host.endsWith(".$it")) }) {
-                            return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                        override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                            if (url != null) page = url
                         }
-                        if (url != pageUrl && (isMedia(url) || isVideo?.invoke(url) == true)) {
-                            val h = LinkedHashMap<String, String>()
-                            req.requestHeaders.forEach { (k, v) -> if (!k.equals("Range", true)) h[k] = v }
-                            if (h.keys.none { it.equals("User-Agent", true) }) h["User-Agent"] = ua
-                            if (h.keys.none { it.equals("Referer", true) }) h["Referer"] = page
-                            CookieManager.getInstance().getCookie(url)?.let { h["Cookie"] = it }
-                            Log.i(TAG, "hit $url  ←  $pageUrl")
-                            finish(PlayInfo(url, h, parse = false, jx = false))
+
+                        override fun shouldInterceptRequest(view: WebView, req: WebResourceRequest): WebResourceResponse? {
+                            val url = req.url.toString()
+                            val host = req.url.host.orEmpty()
+                            if (ads.any { it.isNotBlank() && (host == it || host.endsWith(".$it")) }) {
+                                return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                            }
+                            if (url != pageUrl && (isMedia(url) || isVideo?.invoke(url) == true)) {
+                                val h = LinkedHashMap<String, String>()
+                                req.requestHeaders.forEach { (k, v) -> if (!k.equals("Range", true)) h[k] = v }
+                                if (h.keys.none { it.equals("User-Agent", true) }) h["User-Agent"] = ua
+                                if (h.keys.none { it.equals("Referer", true) }) h["Referer"] = page
+                                runCatching { CookieManager.getInstance().getCookie(url) }.getOrNull()?.let { h["Cookie"] = it }
+                                Log.i(TAG, "hit $url  ←  $pageUrl")
+                                finish(PlayInfo(url, h, parse = false, jx = false))
+                            }
+                            return null
                         }
-                        return null
+
+                        override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean =
+                            req.url.scheme !in setOf("http", "https")
+
+                        // 解析站证书经常不规范；这个 WebView 只用来找视频地址，不提交任何数据
+                        @SuppressLint("WebViewClientOnReceivedSslError")
+                        override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) = handler.proceed()
                     }
-
-                    override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean =
-                        req.url.scheme !in setOf("http", "https")
-
-                    // 解析站证书经常不规范；这个 WebView 只用来找视频地址，不提交任何数据
-                    @SuppressLint("WebViewClientOnReceivedSslError")
-                    override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) = handler.proceed()
+                    w.loadUrl(pageUrl, headers.filterKeys { !it.equals("User-Agent", true) })
+                } catch (t: Throwable) {
+                    Log.w(TAG, "WebView 嗅探初始化失败", t)
+                    finish(null)
                 }
-                w.loadUrl(pageUrl, headers.filterKeys { !it.equals("User-Agent", true) })
             }
         }
     }

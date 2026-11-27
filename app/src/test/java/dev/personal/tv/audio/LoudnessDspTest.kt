@@ -55,4 +55,21 @@ class LoudnessDspTest {
         val out = run(dsp, tone(3.0, 0.99, 2500.0))
         assertTrue(out.all { kotlin.math.abs(it) <= 0.9f })
     }
+
+    @Test fun handlesLowSampleRateAndNonFiniteInput() {
+        val low = LoudnessDsp(4000, 1).apply { dialog = true; night = true }
+        val bad = floatArrayOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, 0.25f, -0.5f, 0f)
+        low.process(bad, bad.size)
+        assertTrue(bad.all { it.isFinite() && kotlin.math.abs(it) <= 0.9f })
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectsNonPositiveSampleRate() {
+        LoudnessDsp(0, 2)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectsNonPositiveChannels() {
+        LoudnessDsp(48000, 0)
+    }
 }

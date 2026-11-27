@@ -80,7 +80,9 @@ object Downloads {
     }
 
     private lateinit var app: Context
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> Log.w(TAG, "uncaught", e) },
+    )
     private val executor = Executors.newFixedThreadPool(3)
     private var inited = false
 

@@ -20,23 +20,27 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.tv.material3.Text
 import dev.personal.tv.audio.AudioFx
 import dev.personal.tv.data.Prefs
 import dev.personal.tv.data.SearchIndex
@@ -46,6 +50,7 @@ import dev.personal.tv.source.SiteCfg
 import dev.personal.tv.source.SiteKind
 import dev.personal.tv.source.Sources
 import dev.personal.tv.ui.LocalNav
+import dev.personal.tv.ui.components.Chip
 import dev.personal.tv.ui.components.Focusable
 import dev.personal.tv.ui.components.Hint
 import dev.personal.tv.ui.components.T
@@ -54,6 +59,8 @@ import dev.personal.tv.ui.components.remembered
 import dev.personal.tv.ui.theme.Dimens
 import dev.personal.tv.ui.theme.Palette
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * 设置：片源、播放、线路偏好（每个站点 默认 / 优先 / 不用）。
@@ -61,10 +68,14 @@ import kotlinx.coroutines.delay
 @Composable
 fun SettingsScreen() {
     val nav = LocalNav.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     val mem = nav.mem("settings")
     val first = remember { FocusRequester() }
     var sites by remember { mutableStateOf<List<SiteCfg>?>(null) }
     var err by remember { mutableStateOf<String?>(null) }
+    val crashFile = remember(ctx) { File(ctx.filesDir, "last-crash.txt") }
+    var crashText by remember { mutableStateOf(runCatching { crashFile.takeIf { it.exists() }?.readText()?.takeIf { it.isNotBlank() } }.getOrNull()) }
+    var showCrash by remember { mutableStateOf(false) }
     LaunchedEffect(Sources.url, Prefs.searchAll) {
         if (Sources.empty) { sites = null; err = "还没有片源，先到「片源」里加一个"; return@LaunchedEffect }
         try {
@@ -73,6 +84,7 @@ fun SettingsScreen() {
         } catch (e: Throwable) { err = "片源配置加载失败：${e.message?.take(60)}" }
     }
 
+    Box(Modifier.fillMaxSize()) {
     Row(
         Modifier.fillMaxSize().padding(start = Dimens.SafeH, end = Dimens.SafeH, top = 36.dp, bottom = Dimens.SafeV),
         horizontalArrangement = Arrangement.spacedBy(36.dp),
@@ -119,7 +131,6 @@ fun SettingsScreen() {
                 Modifier.remembered(mem, "index"), onClick = {},
             ) { }
             Section("版本")
-            val ctx = androidx.compose.ui.platform.LocalContext.current
             Row(
                 "检查更新", dev.personal.tv.source.Updater.status,
                 Modifier.remembered(mem, "update"), onClick = { dev.personal.tv.source.Updater.act(ctx) },
@@ -127,6 +138,12 @@ fun SettingsScreen() {
             dev.personal.tv.source.Updater.qr?.let {
                 QrImage(it, Modifier.padding(start = 12.dp, top = 6.dp).size(140.dp))
             }
+            if (crashText != null) Row(
+                "上次闪退日志",
+                crashText!!.lineSequence().firstOrNull().orEmpty().take(48) + " · 按 OK 查看",
+                Modifier.remembered(mem, "crash"),
+                onClick = { showCrash = true },
+            ) { fg -> T("›", 16.sp, fg) }
             // 最后一行聚焦时下面留点空，第二行字不贴着屏幕边
             androidx.compose.foundation.layout.Spacer(Modifier.height(28.dp))
         }
@@ -145,7 +162,7 @@ fun SettingsScreen() {
                     // 能用的在前；同类里保持配置里的顺序
                     val ordered = list.sortedBy { if (!(it.kind.supported && it.searchable)) 2 else if (it.notVideo != null) 1 else 0 }
                     LazyColumn(Modifier.weight(1f)) {
-                        items(ordered, key = { it.key }) { s -> SiteRow(s, Modifier.remembered(mem, "site:${s.key}")) }
+                        itemsIndexed(ordered, key = { i, s -> "$i:${s.key}" }) { _, s -> SiteRow(s, Modifier.remembered(mem, "site:${s.key}")) }
                     }
                     Row(Modifier.padding(top = 8.dp, start = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         Hint("OK", "切换", 9.5.sp)
@@ -156,7 +173,62 @@ fun SettingsScreen() {
             }
         }
     }
+    if (showCrash && crashText != null) {
+        CrashLogOverlay(
+            text = crashText!!,
+            onClear = {
+                runCatching { crashFile.delete() }
+                crashText = null
+                showCrash = false
+                nav.toast("已清除闪退日志")
+            },
+            onClose = { showCrash = false },
+        )
+    }
+    }
     LaunchedEffect(Unit) { if (mem.lastKey == null) { delay(80); runCatching { first.requestFocus() } } }
+}
+
+@Composable
+private fun CrashLogOverlay(text: String, onClear: () -> Unit, onClose: () -> Unit) {
+    val closeReq = remember { FocusRequester() }
+    val scroll = rememberScrollState()
+    val scope = rememberCoroutineScope()
+    BackHandler { onClose() }
+    LaunchedEffect(Unit) { delay(50); runCatching { closeReq.requestFocus() } }
+    Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.82f))
+            .padding(horizontal = Dimens.SafeH, vertical = Dimens.SafeV)
+            .onPreviewKeyEvent { e ->
+                if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (e.key) {
+                    Key.DirectionDown -> { scope.launch { scroll.animateScrollTo((scroll.value + 160).coerceAtMost(scroll.maxValue)) }; true }
+                    Key.DirectionUp -> { scope.launch { scroll.animateScrollTo((scroll.value - 160).coerceAtLeast(0)) }; true }
+                    else -> false
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(Modifier.fillMaxSize().background(Palette.Panel, RoundedCornerShape(14.dp)).padding(20.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    T("上次闪退日志（本机脱敏）", 15.sp, weight = FontWeight.Bold)
+                    T("↑ ↓ 翻页 · 拍给开发者或清除", 9.5.sp, Palette.T3, modifier = Modifier.padding(top = 2.dp))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Chip("清除记录", false, onClear, size = 10.5.sp, height = 26.dp, idleBg = Color.White.copy(alpha = 0.08f))
+                    Chip("关闭", true, onClose, Modifier.focusRequester(closeReq), size = 10.5.sp, height = 26.dp)
+                }
+            }
+            Box(
+                Modifier.padding(top = 12.dp).weight(1f).fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                    .verticalScroll(scroll).padding(12.dp),
+            ) {
+                Text(text, color = Palette.T2, fontSize = 9.5.sp, lineHeight = 14.sp, fontFamily = FontFamily.Monospace)
+            }
+        }
+    }
 }
 
 @Composable

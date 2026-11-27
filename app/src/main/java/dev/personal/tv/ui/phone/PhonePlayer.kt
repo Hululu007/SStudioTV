@@ -153,6 +153,7 @@ fun PhonePlayer(r: Route.Player) {
                 }
             },
             update = { it.keepScreenOn = ps.awake },
+            onRelease = { it.player = null },
             modifier = Modifier.fillMaxSize(),
         )
         if (ps.status != null && ps.posMs == 0L || ps.fail != null) {

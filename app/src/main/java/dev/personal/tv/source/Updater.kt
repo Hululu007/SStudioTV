@@ -1,10 +1,11 @@
 package dev.personal.tv.source
 
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import androidx.compose.runtime.getValue
@@ -13,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
 import com.google.gson.JsonParser
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -52,8 +54,13 @@ object Updater {
     private lateinit var app: Context
     /** 去开了「允许安装应用」：回到 App 时接着装 */
     private var resumeInstall = false
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e -> Log.w(TAG, "uncaught", e) },
+    )
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     private val ua get() = "SStudioTV/$current"
+
+    private suspend fun ui(block: () -> Unit) = withContext(Dispatchers.Main) { block() }
 
     fun init(ctx: Context) {
         app = ctx.applicationContext
@@ -98,20 +105,27 @@ object Updater {
 
     /** 返回：有没有新版本 */
     suspend fun check(): Boolean = withContext(Dispatchers.IO) {
-        if (state == St.CHECKING || state == St.DOWNLOADING) return@withContext state == St.AVAILABLE
-        state = St.CHECKING; note = null; qr = null
+        val cur = withContext(Dispatchers.Main) {
+            if (state == St.CHECKING || state == St.DOWNLOADING) return@withContext state
+            state = St.CHECKING; note = null; qr = null
+            null
+        }
+        if (cur != null) return@withContext cur == St.AVAILABLE
         val r = runCatching { fromApi() }.onFailure { Log.w(TAG, "api", it) }.getOrNull()
             ?: MIRRORS.firstNotNullOfOrNull { m -> runCatching { fromRedirect(m) }.onFailure { Log.w(TAG, "redirect $m", it) }.getOrNull() }
         if (r == null) {
-            state = St.FAILED; note = "连不上 GitHub，过会儿再试"
+            ui { state = St.FAILED; note = "连不上 GitHub，过会儿再试" }
             return@withContext false
         }
         val (tag, url) = r
-        latest = tag.removePrefix("v")
+        val ver = tag.removePrefix("v")
         apkUrl = url
-        Log.i(TAG, "最新 $latest · 当前 $current · $url")
-        val newer = newer(latest!!, current)
-        state = if (newer) St.AVAILABLE else St.LATEST
+        Log.i(TAG, "最新 $ver · 当前 $current · $url")
+        val newer = newer(ver, current)
+        ui {
+            latest = ver
+            state = if (newer) St.AVAILABLE else St.LATEST
+        }
         newer
     }
 
@@ -148,23 +162,28 @@ object Updater {
 
     private suspend fun download() = withContext(Dispatchers.IO) {
         val url = apkUrl ?: return@withContext
-        state = St.DOWNLOADING; progress = 0f; note = null; qr = null
+        val ver = withContext(Dispatchers.Main) {
+            state = St.DOWNLOADING; progress = 0f; note = null; qr = null
+            latest
+        } ?: return@withContext
         val dir = File(app.cacheDir, "update").apply { mkdirs() }
-        val f = File(dir, "SStudioTV-$latest.apk")
+        val f = File(dir, "SStudioTV-$ver.apk")
         var why = ""
         for ((i, m) in MIRRORS.withIndex()) {
             val last = i == MIRRORS.lastIndex
             val ok = runCatching { fetch(m + url, f, giveUpIfSlow = !last) }.onFailure { why = it.message.orEmpty(); Log.w(TAG, "download via '$m'", it) }.getOrDefault(false)
             if (ok) {
                 val err = verify(f)
-                if (err == null) { apk = f; state = St.READY; return@withContext }
+                if (err == null) { apk = f; ui { state = St.READY }; return@withContext }
                 why = err
             }
         }
         f.delete()
-        state = St.FAILED
-        note = "下载失败（${why.take(40)}）· 按一下重试"
-        qr = "https://github.com/$REPO/releases/latest"
+        ui {
+            state = St.FAILED
+            note = "下载失败（${why.take(40)}）· 按一下重试"
+            qr = "https://github.com/$REPO/releases/latest"
+        }
     }
 
     /** 下到 [f]。[giveUpIfSlow]：前 12 秒连 1 MB 都没下到就换下一个镜像 */
@@ -177,6 +196,7 @@ object Updater {
             if (total in 1 until 1_000_000) error("文件太小，不是安装包")
             val t0 = System.currentTimeMillis()
             var got = 0L
+            var lastPct = -1
             f.outputStream().use { out ->
                 body.byteStream().use { inp ->
                     val buf = ByteArray(64 * 1024)
@@ -185,7 +205,14 @@ object Updater {
                         if (n < 0) break
                         out.write(buf, 0, n)
                         got += n
-                        if (total > 0) progress = got.toFloat() / total
+                        if (total > 0) {
+                            val pct = ((got * 100) / total).toInt().coerceIn(0, 100)
+                            if (pct != lastPct) {
+                                lastPct = pct
+                                val p = got.toFloat() / total
+                                mainHandler.post { progress = p }
+                            }
+                        }
                         if (giveUpIfSlow && got < 1_000_000 && System.currentTimeMillis() - t0 > 12_000) { Log.i(TAG, "太慢，换镜像"); return false }
                     }
                 }
@@ -221,12 +248,13 @@ object Updater {
             if (ok) { resumeInstall = true; return }
             // 有的电视没有这个设置页：直接试安装，不行再说
         }
-        val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
-        val i = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).newTask(ctx)
         try {
+            val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+            val i = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).newTask(ctx)
             ctx.startActivity(i)
-        } catch (e: ActivityNotFoundException) {
+        } catch (e: Throwable) {
+            Log.w(TAG, "install", e)
             state = St.FAILED
             note = "这台设备不能直接安装，用手机扫码下载新版"
             qr = "https://github.com/$REPO/releases/latest"

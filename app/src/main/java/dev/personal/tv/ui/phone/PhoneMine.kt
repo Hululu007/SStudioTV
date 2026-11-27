@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -197,9 +198,43 @@ fun PhoneMine(header: Boolean = true) {
         }
 
         Group("版本")
+        val crashFile = remember(ctx) { java.io.File(ctx.filesDir, "last-crash.txt") }
+        var crashText by remember { mutableStateOf(runCatching { crashFile.takeIf { it.exists() }?.readText()?.takeIf { it.isNotBlank() } }.getOrNull()) }
+        var showCrash by remember { mutableStateOf(false) }
+        val clipboard = LocalClipboardManager.current
         Card {
             SettingRow("检查更新", dev.personal.tv.source.Updater.status, onClick = { dev.personal.tv.source.Updater.act(ctx) }) { Tx("›", 20.sp, Palette.T3) }
             dev.personal.tv.source.Updater.qr?.let { QrImage(it, Modifier.padding(horizontal = PC.Edge, vertical = 8.dp).size(180.dp)) }
+            if (crashText != null) {
+                Divider()
+                SettingRow("上次闪退日志", crashText!!.lineSequence().firstOrNull().orEmpty().take(48), onClick = { showCrash = true }) { Tx("›", 20.sp, Palette.T3) }
+            }
+        }
+        if (showCrash && crashText != null) {
+            AlertDialog(
+                onDismissRequest = { showCrash = false },
+                containerColor = PC.Card2,
+                title = { Text("上次闪退日志") },
+                text = {
+                    Box(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                        Text(crashText!!, fontSize = 11.sp, lineHeight = 15.sp, color = Palette.T2)
+                    }
+                },
+                confirmButton = {
+                    TextButton({
+                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(crashText!!))
+                        nav.toast("已复制闪退日志")
+                    }) { Text("复制", color = Palette.Douban) }
+                },
+                dismissButton = {
+                    TextButton({
+                        runCatching { crashFile.delete() }
+                        crashText = null
+                        showCrash = false
+                        nav.toast("已清除闪退日志")
+                    }) { Text("清除", color = Palette.T2) }
+                },
+            )
         }
         val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull().orEmpty() }
         Tx(
@@ -235,7 +270,7 @@ fun PhoneMine(header: Boolean = true) {
             )
             val ordered = remember(list) { list.sortedBy { if (!(it.kind.supported && it.searchable)) 2 else if (it.notVideo != null) 1 else 0 } }
             LazyColumn(Modifier.fillMaxWidth().navigationBarsPadding()) {
-                items(ordered, key = { it.key }) { s -> SitePrefRow(s) }
+                itemsIndexed(ordered, key = { i, s -> "$i:${s.key}" }) { _, s -> SitePrefRow(s) }
             }
         }
     }

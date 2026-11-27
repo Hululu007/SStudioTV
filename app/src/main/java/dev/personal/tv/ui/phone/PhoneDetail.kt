@@ -135,12 +135,11 @@ fun PhoneDetail(r: Route.Detail) {
 private fun Header(t: Title) {
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     Box(Modifier.fillMaxWidth()) {
-        // 背景：海报放大模糊（Android 12 以下没有模糊，调暗一些）
+        // 背景：低分辨率海报放大模糊（各系统版本一致，也不占大离屏纹理）
         Backdrop(
             t,
-            Modifier.matchParentSize().graphicsLayer { alpha = if (Build.VERSION.SDK_INT >= 31) 0.6f else 0.3f }
-                .then(if (Build.VERSION.SDK_INT >= 31) Modifier.blur(36.dp) else Modifier),
-            silhouette = false, alignment = Alignment.Center,
+            Modifier.matchParentSize().graphicsLayer { alpha = 0.55f },
+            silhouette = false, alignment = Alignment.Center, soft = true,
         )
         Box(Modifier.matchParentSize().drawBehind { drawRect(Brush.verticalGradient(0f to PC.Bg.copy(alpha = 0.2f), 0.7f to PC.Bg.copy(alpha = 0.75f), 1f to PC.Bg)) })
         Row(Modifier.padding(start = PC.Edge, end = PC.Edge, top = top + 60.dp, bottom = 8.dp)) {

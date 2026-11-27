@@ -46,8 +46,8 @@ object Lab {
         val t = System.currentTimeMillis()
         return try {
             // 插件的阻塞调用没法被取消：超时就不等它了（线程留在后台自己结束），界面和别的站点不受影响
-            val job = CoroutineScope(Dispatchers.IO).async { block() }
-            withTimeout(timeoutMs) { job.await() }
+            val job = bgIoScope.async { block() }
+            try { withTimeout(timeoutMs) { job.await() } } finally { job.cancel() }
         } catch (e: Throwable) {
             val root = generateSequence(e) { it.cause }.last()
             note("✗ $label · ${root.javaClass.simpleName}: ${root.message?.take(120)}")
@@ -211,8 +211,8 @@ suspend fun Lab.scan(ctx: Context, cfgUrl: String, wd: String) = kotlinx.corouti
                 if (!s.kind.supported) { Log.i(tag, "SCAN|${s.name}|${s.kind.label}|不支持"); return@launch }
                 val t = System.currentTimeMillis()
                 fun <T> run(ms: Long, b: () -> T): T = kotlinx.coroutines.runBlocking {
-                    val j = CoroutineScope(Dispatchers.IO).async { b() }
-                    withTimeout(ms) { j.await() }
+                    val j = bgIoScope.async { b() }
+                    try { withTimeout(ms) { j.await() } } finally { j.cancel() }
                 }
                 val r = runCatching {
                     val api = run(20_000) { Sites.get(ctx, c, s) }

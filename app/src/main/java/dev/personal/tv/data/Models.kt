@@ -122,7 +122,7 @@ data class Progress(
     /** 「第 3 集」或者「11.01 上」 */
     fun epText(title: String) = dev.personal.tv.source.Eps.text(epName, ep, title, named?.not())
 
-    val fraction get() = if (durationSec == 0) 0f else positionSec.toFloat() / durationSec
+    val fraction get() = if (durationSec <= 0) 0f else (positionSec.toFloat() / durationSec).coerceIn(0f, 1f)
     val finishedEp get() = durationSec > 0 && positionSec >= durationSec - 60
     val remainingMin get() = ((durationSec - positionSec) / 60).coerceAtLeast(1)
 }

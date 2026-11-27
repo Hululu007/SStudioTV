@@ -318,6 +318,7 @@ fun LivePlayer(r: Route.LivePlay) {
                 }
             },
             update = { it.keepScreenOn = awake },
+            onRelease = { it.player = null },
             modifier = Modifier.fillMaxSize(),
         )
         if (!overlay) status?.let { T(it, 13.sp, Palette.T2, modifier = Modifier.align(Alignment.Center)) }

@@ -164,15 +164,22 @@ private fun androidx.compose.foundation.layout.ColumnScope.EpisodePane(
         return
     }
     val state = rememberLazyGridState(initialFirstVisibleItemIndex = (entry - 6).coerceAtLeast(0).let { it - it % 4 })
+    var entryAttached by remember(line.key, entry) { mutableStateOf(false) }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(if (numeric) 64.dp else 130.dp),
         state = state,
         modifier = Modifier.fillMaxWidth().weight(1f)
-            .focusProperties { this.enter = { entryReq } }.focusGroup(),
+            .focusProperties { this.enter = { if (entryAttached) entryReq else FocusRequester.Default } }.focusGroup(),
         horizontalArrangement = Arrangement.spacedBy(7.dp),
         verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         itemsIndexed(eps, key = { i, _ -> key(i) }) { i, e ->
+            if (i == entry) {
+                androidx.compose.runtime.DisposableEffect(line.key, entry) {
+                    entryAttached = true
+                    onDispose { entryAttached = false }
+                }
+            }
             val isTarget = i == tIdx
             Focusable(
                 {

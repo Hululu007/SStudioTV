@@ -17,16 +17,21 @@ class App : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         dev.personal.tv.audio.AudioFx.init(this)
-        val proc = if (Build.VERSION.SDK_INT >= 28) getProcessName() else packageName
+        val proc = currentProcessName()
         // 两个进程都可能用 WebView（插件、嗅探），Android 9+ 要求各用各的数据目录
         if (Build.VERSION.SDK_INT >= 28 && proc != packageName) {
             runCatching { WebView.setDataDirectorySuffix(proc.substringAfter(':')) }
         }
-        if (proc.endsWith(":spider")) { guardPluginCrashes(); dev.personal.tv.spider.QuietToasts.install(this) }
+        if (proc.endsWith(":spider")) {
+            guardPluginCrashes()
+            dev.personal.tv.spider.QuietToasts.install(this)
+            runCatching { cacheDir.resolve("spider-out").listFiles()?.forEach { it.delete() } }
+        }
         dev.personal.tv.source.ConfigLoader.assets = assets
         dev.personal.tv.source.ConfigLoader.dir = filesDir
         // 片库和本地记录只在主进程用，插件进程不加载
         if (proc == packageName) {
+            installCrashLog()
             dev.personal.tv.data.Prefs.init(this)
             dev.personal.tv.media.MediaCache.init(this)
             dev.personal.tv.media.Downloads.init(this)
@@ -41,6 +46,37 @@ class App : Application(), ImageLoaderFactory {
             dev.personal.tv.source.PluginNotes.init(this)
             dev.personal.tv.source.Live.init(this)
             dev.personal.tv.data.SearchIndex.init(this)
+        }
+    }
+
+    /** Android 6–8.1 没有 getProcessName()：读 /proc/self/cmdline，避免 :spider 进程误跑主进程初始化 */
+    private fun currentProcessName(): String {
+        if (Build.VERSION.SDK_INT >= 28) return getProcessName()
+        runCatching {
+            java.io.File("/proc/self/cmdline").readText().substringBefore('\u0000').trim()
+        }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { return it }
+        val pid = android.os.Process.myPid()
+        val am = getSystemService(android.app.ActivityManager::class.java)
+        return runCatching { am?.runningAppProcesses?.firstOrNull { it.pid == pid }?.processName }.getOrNull() ?: packageName
+    }
+
+    /** 记录最近一次主进程未捕获崩溃到本机 filesDir/last-crash.txt（脱敏 URL 查询参数），不吞掉系统默认处理 */
+    private fun installCrashLog() {
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        val file = java.io.File(filesDir, "last-crash.txt")
+        val ver = runCatching {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0).versionName
+        }.getOrNull().orEmpty()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            runCatching {
+                val ts = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+                val sw = java.io.StringWriter()
+                e.printStackTrace(java.io.PrintWriter(sw))
+                val body = sw.toString().replace(Regex("https?://[^\\s)]+"), "<URL>").take(12_000)
+                file.writeText("time=$ts ver=$ver sdk=${Build.VERSION.SDK_INT} thread=${t.name}\n$body")
+            }
+            prev?.uncaughtException(t, e)
         }
     }
 

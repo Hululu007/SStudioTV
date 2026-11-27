@@ -33,7 +33,7 @@ object CrossSources {
     private var file: File? = null
     /** 片源地址 → 它的采集站 */
     private var cache: MutableMap<String, Entry> = mutableMapOf()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> Log.w(TAG, "uncaught", e) })
     @Volatile private var refreshing = false
 
     fun init(ctx: Context) {
@@ -54,11 +54,16 @@ object CrossSources {
         if (others.isEmpty()) return base
         refreshIfStale(others)
         val seen = base.sites.map { norm(it.api) }.toHashSet()
+        val usedKeys = base.sites.map { it.key }.toHashSet()
         val extra = ArrayList<SiteCfg>()
         synchronized(this) {
             for (u in others) for (s in cache[u]?.sites.orEmpty()) {
                 if (!seen.add(norm(s.api))) continue
-                extra += SiteCfg("x:${s.key}", s.name, s.type, s.api, s.ext, null, true, s.quick, s.timeout, s.header.orEmpty())
+                val baseKey = "x:${s.key}"
+                var key = baseKey
+                var seq = 2
+                while (!usedKeys.add(key)) key = "$baseKey#${seq++}"
+                extra += SiteCfg(key, s.name, s.type, s.api, s.ext, null, true, s.quick, s.timeout, s.header.orEmpty())
             }
         }
         return if (extra.isEmpty()) base else base.copy(sites = base.sites + extra)

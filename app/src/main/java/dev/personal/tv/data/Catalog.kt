@@ -27,7 +27,9 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 
-internal val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+internal val appScope = CoroutineScope(
+    SupervisorJob() + Dispatchers.IO + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> Log.w("AppScope", "uncaught", e) },
+)
 internal val gson = Gson()
 
 /**
@@ -56,7 +58,7 @@ object Catalog {
     private val heats = mutableStateMapOf<String, Heat>()
     private val recs = mutableStateMapOf<String, List<String>>()
     private var hotAt = 0L
-    private val inflight = HashSet<String>()
+    private val inflight = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /** 最近一次拉豆瓣失败的原因，首页没数据时显示 */
     var error by mutableStateOf<String?>(null)
@@ -74,10 +76,15 @@ object Catalog {
         runCatching {
             if (file.exists()) {
                 val s = gson.fromJson(file.readText(), Saved::class.java)
-                s.titles?.filter { it.name != null && it.genres != null && it.cast != null }?.forEach { titles[it.id] = it }
-                s.hotTv?.let { hotTv.addAll(it) }
-                s.hotMovie?.let { hotMovie.addAll(it) }
-                hotAt = s.hotAt
+                @Suppress("SENSELESS_COMPARISON")
+                s?.titles?.filter {
+                    it != null && it.id != null && it.name != null && it.region != null && it.kind != null &&
+                        it.genres != null && it.cast != null && it.dtype != null && it.oneLiner != null &&
+                        it.origName != null && it.desc != null && it.director != null
+                }?.forEach { titles[it.id] = it }
+                s?.hotTv?.filterNotNull()?.let { hotTv.addAll(it) }
+                s?.hotMovie?.filterNotNull()?.let { hotMovie.addAll(it) }
+                hotAt = s?.hotAt ?: 0L
             }
         }.onFailure { Log.w(TAG, "load", it) }
         appScope.launch {
@@ -159,25 +166,27 @@ object Catalog {
             repeat(2) { if (i < tv.size) out += tv[i++] }
             if (j < mv.size) out += mv[j++]
         }
-        return out
+        return out.distinctBy { it.id }
     }
 
     suspend fun refreshHot() = withContext(Dispatchers.IO) {
-        loading = true
+        withContext(Dispatchers.Main) { loading = true }
         try {
             val tv = Douban.recentHot("tv", 30)
             val mv = Douban.recentHot("movie", 20)
             withContext(Dispatchers.Main) {
                 put(tv + mv)
-                hotTv.clear(); hotTv.addAll(tv.map { it.id })
-                hotMovie.clear(); hotMovie.addAll(mv.map { it.id })
+                hotTv.clear(); hotTv.addAll(tv.map { it.id }.distinct())
+                hotMovie.clear(); hotMovie.addAll(mv.map { it.id }.distinct())
                 hotAt = System.currentTimeMillis()
                 error = null
             }
         } catch (e: Throwable) {
             Log.w(TAG, "hot", e)
-            error = "豆瓣连不上：${e.message}"
-        } finally { loading = false }
+            withContext(Dispatchers.Main) { error = "豆瓣连不上：${e.message}" }
+        } finally {
+            withContext(Dispatchers.Main) { loading = false }
+        }
     }
 
     // ---------------------------------------------------------------- 详情
@@ -235,7 +244,9 @@ object Catalog {
         if (t.fromSource) return
         if (heats.containsKey(t.id) || !inflight.add("heat:${t.id}")) return
         try {
-            runCatching { withContext(Dispatchers.IO) { Douban.rating(t) } }.getOrNull()?.let { heats[t.id] = it }
+            runCatching { withContext(Dispatchers.IO) { Douban.rating(t) } }.getOrNull()?.let {
+                withContext(Dispatchers.Main) { heats[t.id] = it }
+            }
         } finally { inflight.remove("heat:${t.id}") }
     }
 
@@ -246,8 +257,10 @@ object Catalog {
         if (recs.containsKey(t.id) || !inflight.add("rec:${t.id}")) return
         try {
             val list = runCatching { withContext(Dispatchers.IO) { Douban.recommendations(t) } }.getOrNull() ?: return
-            put(list)
-            recs[t.id] = list.map { it.id }
+            withContext(Dispatchers.Main) {
+                put(list)
+                recs[t.id] = list.map { it.id }.distinct()
+            }
         } finally { inflight.remove("rec:${t.id}") }
     }
 
@@ -359,9 +372,10 @@ object Store {
         runCatching {
             if (file.exists()) {
                 val s = gson.fromJson(file.readText(), Saved::class.java)
-                s.progress?.forEach { progress[it.titleId] = it }
-                s.wish?.let { wish.addAll(it) }
-                s.hidden?.let { hidden.addAll(it) }
+                @Suppress("SENSELESS_COMPARISON")
+                s?.progress?.filter { it != null && it.titleId != null }?.forEach { progress[it.titleId] = it }
+                s?.wish?.filterNotNull()?.let { wish.addAll(it) }
+                s?.hidden?.filterNotNull()?.let { hidden.addAll(it) }
             }
         }.onFailure {
             // 读不出来（写坏了）：先把坏文件留一份，别让下一次保存用空表盖掉，以后还能手动救

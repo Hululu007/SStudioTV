@@ -51,8 +51,12 @@ object SourceSearch {
                     launch {
                         val vods = (if (s.kind == SiteKind.JAR) sem else cmsSem).withPermit {
                             // 插件的阻塞调用取消不了：超时就不等了，线程自己跑完
-                            val job = CoroutineScope(Dispatchers.IO).async { Sites.get(app, cfg, s).search(q) }
-                            runCatching { withTimeoutOrNull(12_000) { job.await() } }.getOrNull().orEmpty()
+                            val job = bgIoScope.async { Sites.get(app, cfg, s).search(q) }
+                            try {
+                                runCatching { withTimeoutOrNull(12_000) { job.await() } }.getOrNull().orEmpty()
+                            } finally {
+                                job.cancel()
+                            }
                         }
                         for (v in vods) {
                             if (v.name.isBlank() || !hit(Match.norm(v.name), want)) continue

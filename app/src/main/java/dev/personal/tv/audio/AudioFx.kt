@@ -24,9 +24,18 @@ object AudioFx {
 
     private class Pref(private val key: String, def: Boolean) {
         val state = mutableStateOf(def)
-        fun load(p: SharedPreferences) { state.value = p.getBoolean(key, state.value) }
+        @Volatile var raw = def
+        fun load(p: SharedPreferences) {
+            val v = p.getBoolean(key, raw)
+            raw = v
+            state.value = v
+        }
         operator fun getValue(o: Any?, p: KProperty<*>) = state.value
-        operator fun setValue(o: Any?, p: KProperty<*>, v: Boolean) { state.value = v; sp?.edit()?.putBoolean(key, v)?.apply() }
+        operator fun setValue(o: Any?, p: KProperty<*>, v: Boolean) {
+            raw = v
+            state.value = v
+            sp?.edit()?.putBoolean(key, v)?.apply()
+        }
     }
 
     private val nightPref = Pref("night", true)
@@ -68,12 +77,14 @@ object AudioFx {
         private var buf = FloatArray(0)
 
         override fun onConfigure(f: AudioFormat): AudioFormat {
+            if (f.sampleRate <= 0 || f.channelCount <= 0) throw UnhandledAudioFormatException(f)
             if (f.encoding != C.ENCODING_PCM_16BIT && f.encoding != C.ENCODING_PCM_FLOAT) throw UnhandledAudioFormatException(f)
             return f
         }
 
         override fun onFlush() {
             val f = inputAudioFormat
+            if (f == AudioFormat.NOT_SET || f.sampleRate <= 0 || f.channelCount <= 0) { dsp = null; return }
             val d = dsp
             // 同样的格式（拖进度、换集）保留拉平状态，只清掉瞬时状态
             if (d != null && d.sampleRate == f.sampleRate && d.channels == f.channelCount) d.reset()
@@ -85,20 +96,32 @@ object AudioFx {
         override fun queueInput(input: ByteBuffer) {
             val n = input.remaining()
             if (n == 0) return
-            val d = dsp ?: LoudnessDsp(inputAudioFormat.sampleRate, inputAudioFormat.channelCount).also { dsp = it }
-            d.night = night; d.level = level; d.dialog = dialog
+            val f = inputAudioFormat
+            if (f == AudioFormat.NOT_SET || f.sampleRate <= 0 || f.channelCount <= 0) {
+                replaceOutputBuffer(n).put(input).flip()
+                return
+            }
+            val d = dsp ?: LoudnessDsp(f.sampleRate, f.channelCount).also { dsp = it }
+            d.night = nightPref.raw; d.level = levelPref.raw; d.dialog = dialogPref.raw
             val out = replaceOutputBuffer(n)
             val inp = input.order(ByteOrder.nativeOrder())
-            val float = inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT
+            val float = f.encoding == C.ENCODING_PCM_FLOAT
             val samples = if (float) n / 4 else n / 2
             if (buf.size < samples) buf = FloatArray(samples)
             val p0 = inp.position()
-            if (float) for (i in 0 until samples) buf[i] = inp.getFloat(p0 + i * 4)
+            if (float) for (i in 0 until samples) {
+                val v = inp.getFloat(p0 + i * 4)
+                buf[i] = if (v.isFinite()) v else 0f
+            }
             else for (i in 0 until samples) buf[i] = inp.getShort(p0 + i * 2) / 32768f
             d.process(buf, samples / d.channels)
-            agcDb = if (level) d.agcGainDb else 0.0
-            if (float) for (i in 0 until samples) out.putFloat(buf[i])
-            else for (i in 0 until samples) out.putShort((buf[i] * 32767f).roundToInt().coerceIn(-32768, 32767).toShort())
+            agcDb = if (levelPref.raw) d.agcGainDb else 0.0
+            if (float) for (i in 0 until samples) out.putFloat(if (buf[i].isFinite()) buf[i] else 0f)
+            else for (i in 0 until samples) {
+                val s = buf[i]
+                val v = if (s.isFinite()) (s * 32767f).roundToInt().coerceIn(-32768, 32767) else 0
+                out.putShort(v.toShort())
+            }
             inp.position(inp.limit())
             out.flip()
         }

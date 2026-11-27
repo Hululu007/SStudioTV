@@ -37,7 +37,17 @@ object QuietToasts {
                     if (!text.isNullOrBlank()) runCatching {
                         app.sendBroadcast(android.content.Intent(dev.personal.tv.source.PluginNotes.ACTION).setPackage(app.packageName).putExtra("text", text))
                     }
-                    null
+                    when (m.returnType) {
+                        Boolean::class.javaPrimitiveType -> false
+                        Int::class.javaPrimitiveType -> 0
+                        Long::class.javaPrimitiveType -> 0L
+                        Float::class.javaPrimitiveType -> 0f
+                        Double::class.javaPrimitiveType -> 0.0
+                        Short::class.javaPrimitiveType -> 0.toShort()
+                        Byte::class.javaPrimitiveType -> 0.toByte()
+                        Char::class.javaPrimitiveType -> '\u0000'
+                        else -> null
+                    }
                 } else try {
                     m.invoke(real, *(args ?: emptyArray()))
                 } catch (e: InvocationTargetException) {

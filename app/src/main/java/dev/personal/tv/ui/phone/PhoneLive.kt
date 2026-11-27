@@ -249,6 +249,7 @@ fun PhoneLivePlayer(r: Route.LivePlay) {
                 }
             },
             update = { it.keepScreenOn = awake },
+            onRelease = { it.player = null },
             modifier = Modifier.fillMaxSize(),
         )
         Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { if (list) list = false else { controls = !controls; poke = System.nanoTime() } } })

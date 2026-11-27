@@ -198,6 +198,11 @@ private fun ResultRow(v: Vod, selected: Boolean, modifier: Modifier, onClick: ()
     }
 }
 
-/** 页面离开后协程别跟着取消：配置加载、jar 初始化比较慢，回来还能看到结果 */
+/** 页面离开后协程别跟着取消：配置加载、jar 初始化比较慢，回来还能看到结果；共用单个作用域避免反复创建泄漏 */
+private val labUiScope = kotlinx.coroutines.CoroutineScope(
+    kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main +
+        kotlinx.coroutines.CoroutineExceptionHandler { _, e -> android.util.Log.w("SourceLab", "uncaught", e) },
+)
+
 @Composable
-private fun rememberScopeSafe() = remember { kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main) }
+private fun rememberScopeSafe() = labUiScope
