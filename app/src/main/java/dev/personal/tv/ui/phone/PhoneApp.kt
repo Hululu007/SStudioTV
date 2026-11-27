@@ -93,6 +93,7 @@ fun PhoneApp() {
                         Route.Sources -> PhoneSources()
                         Route.Pans -> PhonePans()
                         Route.Downloads -> PhoneDownloads()
+                        Route.TvRemote -> PhoneTvRemote()
                         Route.Settings -> SubPage("设置") { PhoneMine(header = false) }
                         is Route.LivePlay -> PhoneLivePlayer(r)
                         else -> SubPage("手机版没有这一页") { Empty("这一页只有电视界面有", "到「我的 → 界面」切换成电视界面再用") }

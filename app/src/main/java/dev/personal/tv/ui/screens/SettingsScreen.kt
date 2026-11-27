@@ -76,6 +76,8 @@ fun SettingsScreen() {
     val crashFile = remember(ctx) { File(ctx.filesDir, "last-crash.txt") }
     var crashText by remember { mutableStateOf(runCatching { crashFile.takeIf { it.exists() }?.readText()?.takeIf { it.isNotBlank() } }.getOrNull()) }
     var showCrash by remember { mutableStateOf(false) }
+    var showLink by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     LaunchedEffect(Sources.url, Prefs.searchAll) {
         if (Sources.empty) { sites = null; err = "还没有片源，先到「片源」里加一个"; return@LaunchedEffect }
         try {
@@ -111,6 +113,37 @@ fun SettingsScreen() {
                 "当前片源没有、集数落后、画质差时，去其它片源的采集站补搜" + (sites?.count { dev.personal.tv.source.CrossSources.isCross(it) }?.takeIf { it > 0 }?.let { " · $it 个站" } ?: ""),
                 Modifier.remembered(mem, "searchAll"), onClick = { Prefs.searchAll = !Prefs.searchAll },
             ) { fg -> Toggle(Prefs.searchAll, onLight = fg == Palette.Bg) }
+            Section("手机联动")
+            Row(
+                "局域网联动服务",
+                when {
+                    !Prefs.tvLinkEnabled -> "已关闭 · 开启后手机可投屏、同步想看与进度、遥控播放"
+                    dev.personal.tv.link.TvLinkServer.running ->
+                        "运行中 · ${dev.personal.tv.link.TvLinkServer.address ?: "等待局域网"} · 配对码 ${dev.personal.tv.link.TvLinkServer.formattedPairCode()}"
+                    else -> "正在启动局域网服务…"
+                },
+                Modifier.remembered(mem, "tvlink"),
+                onClick = {
+                    val next = !Prefs.tvLinkEnabled
+                    Prefs.tvLinkEnabled = next
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        if (next) dev.personal.tv.link.TvLinkServer.start(ctx.applicationContext)
+                        else dev.personal.tv.link.TvLinkServer.stop()
+                    }
+                },
+            ) { fg -> Toggle(Prefs.tvLinkEnabled, onLight = fg == Palette.Bg) }
+            if (Prefs.tvLinkEnabled) Row(
+                "扫码配对 / 连接信息",
+                dev.personal.tv.link.TvLinkServer.lastEvent ?: "查看配对二维码和 6 位配对码，仅同一局域网可用",
+                Modifier.remembered(mem, "tvlink_qr"),
+                onClick = {
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        if (!dev.personal.tv.link.TvLinkServer.running) dev.personal.tv.link.TvLinkServer.start(ctx.applicationContext)
+                        else dev.personal.tv.link.TvLinkServer.refreshAddress()
+                    }
+                    showLink = true
+                },
+            ) { fg -> T("›", 16.sp, fg) }
             Section("播放")
             Row("自动换线路", "解析不出、播放出错或卡住 20 秒，自动换下一条", Modifier.remembered(mem, "auto"), onClick = { Prefs.autoLine = !Prefs.autoLine }) { fg ->
                 Toggle(Prefs.autoLine, onLight = fg == Palette.Bg)
@@ -185,8 +218,72 @@ fun SettingsScreen() {
             onClose = { showCrash = false },
         )
     }
+    if (showLink) {
+        TvLinkOverlay(
+            onRotateCode = {
+                scope.launch(kotlinx.coroutines.Dispatchers.IO) { dev.personal.tv.link.TvLinkServer.rotatePairCode() }
+                nav.toast("已更换 6 位配对码")
+            },
+            onReset = {
+                scope.launch(kotlinx.coroutines.Dispatchers.IO) { dev.personal.tv.link.TvLinkServer.resetPairing() }
+                nav.toast("已重置授权，旧手机需重新配对")
+            },
+            onClose = { showLink = false },
+        )
+    }
     }
     LaunchedEffect(Unit) { if (mem.lastKey == null) { delay(80); runCatching { first.requestFocus() } } }
+}
+
+@Composable
+private fun TvLinkOverlay(onRotateCode: () -> Unit, onReset: () -> Unit, onClose: () -> Unit) {
+    val closeReq = remember { FocusRequester() }
+    BackHandler { onClose() }
+    LaunchedEffect(Unit) { delay(50); runCatching { closeReq.requestFocus() } }
+    val qr = dev.personal.tv.link.TvLinkServer.qrUri
+    val addr = dev.personal.tv.link.TvLinkServer.address
+    val code = dev.personal.tv.link.TvLinkServer.formattedPairCode()
+    val name = dev.personal.tv.link.TvLinkServer.deviceName
+    val last = dev.personal.tv.link.TvLinkServer.lastEvent
+    Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.82f))
+            .padding(horizontal = Dimens.SafeH, vertical = Dimens.SafeV),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.width(640.dp).background(Palette.Panel, RoundedCornerShape(16.dp)).padding(26.dp),
+            horizontalArrangement = Arrangement.spacedBy(26.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(188.dp).background(if (qr != null) Color.White else Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp)).padding(10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (qr != null) QrImage(qr, Modifier.fillMaxSize())
+                else T("未检测到局域网 IP", 11.sp, Palette.T3)
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                T("连接手机 · 局域网联动", 17.sp, weight = FontWeight.Bold)
+                T("同一 Wi‑Fi 下，在手机端 SStudioTV 打开「连电视」自动发现本机后输入下方配对码（或粘贴地址）。无需账号，不经过云端。", 10.sp, Palette.T2, lines = 3, lineHeight = 15.sp)
+                Row(
+                    Modifier.padding(top = 4.dp).background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(10.dp)).padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    T("配对码", 10.sp, Palette.T3)
+                    Text(code.ifBlank { "------" }, color = Palette.Star, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
+                }
+                T("设备：$name", 10.sp, Palette.T2)
+                T("地址：${addr ?: "未联网（请确认电视已连 Wi‑Fi）"}", 10.sp, Palette.T3)
+                if (last != null) T("最近：$last", 9.5.sp, Palette.Douban)
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Chip("换配对码", false, onRotateCode, size = 10.5.sp, height = 28.dp, idleBg = Color.White.copy(alpha = 0.08f))
+                    Chip("重置授权", false, onReset, size = 10.5.sp, height = 28.dp, idleBg = Color.White.copy(alpha = 0.08f))
+                    Chip("关闭", true, onClose, Modifier.focusRequester(closeReq), size = 10.5.sp, height = 28.dp)
+                }
+            }
+        }
+    }
 }
 
 @Composable

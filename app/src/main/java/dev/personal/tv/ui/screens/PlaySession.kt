@@ -345,6 +345,17 @@ class PlaySession(
         playEpisode(if (i >= 0) i + 1 else ep + 1, n)
     }
 
+    fun playPrev() {
+        val eps = line?.episodes
+        if (!eps.isNullOrEmpty()) {
+            val cur = epName?.let { n -> eps.indexOfFirst { it.name == n } }?.takeIf { it >= 0 } ?: (ep - 1)
+            val prevIdx = cur - 1
+            if (prevIdx >= 0) playEpisode(prevIdx + 1, eps[prevIdx].name)
+        } else if (ep > 1) {
+            playEpisode(ep - 1, null)
+        }
+    }
+
     /** 当前线路的分集按序号显示（电视剧）；false = 按名字（综艺）；还没线路 = null */
     val numericLine: Boolean? get() = line?.let { Eps.numeric(it.episodes, t.name, t.isVariety) }
 
@@ -474,7 +485,16 @@ class PlaySession(
         tried.clear()
         start(ep, here(), line?.key)
     }
-    fun seekBy(sec: Int) { player.seekTo((player.currentPosition + sec * 1000L).coerceIn(0, durMs.takeIf { it > 0 } ?: Long.MAX_VALUE)); posMs = player.currentPosition; if (phase == Phase.PLAY) wantMs = posMs }
+    fun seekBy(sec: Int) { seekTo(player.currentPosition + sec * 1000L) }
+    fun seekTo(ms: Long) {
+        val clamped = ms.coerceIn(0L, durMs.takeIf { it > 0 } ?: Long.MAX_VALUE)
+        player.seekTo(clamped)
+        posMs = player.currentPosition
+        if (phase == Phase.PLAY) wantMs = posMs
+    }
+    fun setPlayWhenReady(play: Boolean) {
+        if (play != player.playWhenReady) togglePlay()
+    }
     fun setRate(r: Float) { speed = r; player.setPlaybackSpeed(r) }
 
     fun save() {

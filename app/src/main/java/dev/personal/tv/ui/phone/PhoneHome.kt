@@ -84,9 +84,22 @@ fun PhoneHome(goTab: (PTab) -> Unit) {
         ) {
             full("top") {
                 Column(Modifier.statusBarsPadding().padding(top = 8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Tx("SStudioTV", 22.sp, weight = FontWeight.ExtraBold)
                         Spacer(Modifier.weight(1f))
+                        val tv = dev.personal.tv.link.TvLinkClient.activeTv
+                        val tvOnline = dev.personal.tv.link.TvLinkClient.online
+                        Tx(
+                            when {
+                                tv == null -> "连电视"
+                                tvOnline -> "● ${tv.name.take(8)}"
+                                else -> "○ ${tv.name.take(8)}"
+                            },
+                            12.sp,
+                            if (tv != null && tvOnline) Palette.Douban else Palette.T2,
+                            modifier = Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.08f))
+                                .clickable { nav.openTvRemote() }.padding(horizontal = 10.dp, vertical = 5.dp),
+                        )
                         Tx(
                             if (Sources.empty) "未添加片源" else Sources.name, 12.sp, if (Sources.empty) Palette.Bad else Palette.T2,
                             modifier = Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.08f))

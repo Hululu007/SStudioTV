@@ -211,6 +211,7 @@ fun PhonePlayer(r: Route.Player) {
                 }.windowInsetsPadding(WindowInsets.displayCutout),
             ) {
                 // 顶栏
+                val castScope = rememberCoroutineScope()
                 Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 16.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(44.dp).clip(CircleShape).clickable { nav.back() }, contentAlignment = Alignment.Center) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White)
@@ -218,6 +219,21 @@ fun PhonePlayer(r: Route.Player) {
                     Column(Modifier.weight(1f).padding(start = 4.dp)) {
                         Tx(t.name + if (t.isEpisodic) "  " + ps.epText() else "", 16.sp, Color.White, FontWeight.Bold)
                         Tx(ps.line?.let { "${it.siteName} · ${it.flag}" } ?: "还没有线路", 11.5.sp, Palette.T2)
+                    }
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(Color.White.copy(alpha = 0.16f))
+                            .clickable {
+                                touch()
+                                ps.save()
+                                castTitleToTv(castScope, nav, t, ps.epNumber, ps.epName, ps.here()) {
+                                    ps.player.pause()
+                                }
+                            }
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                    ) {
+                        Tx("投电视", 12.5.sp, Color.White, FontWeight.SemiBold)
                     }
                 }
                 RoundIcon(Modifier.align(Alignment.CenterStart).padding(start = 20.dp), onClick = { locked = true; panel = null; touch() }) {

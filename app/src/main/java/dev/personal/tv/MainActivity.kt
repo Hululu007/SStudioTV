@@ -25,6 +25,7 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var labReceiver: BroadcastReceiver? = null
+    private var isPhoneMode = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,8 +33,20 @@ class MainActivity : ComponentActivity() {
         SpiderClient.bind(this)
         // 电视用遥控器界面（强制横屏、按 960×540 排）；手机、平板用触屏界面（正常密度，浏览时竖屏，播放时横屏）
         val phone = UiMode.phone(this)
-        if (!phone) requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        else {
+        isPhoneMode = phone
+        if (!phone) {
+            requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            if (dev.personal.tv.data.Prefs.tvLinkEnabled) {
+                lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    dev.personal.tv.link.TvLinkServer.start(applicationContext)
+                }
+            }
+        } else {
+            if (dev.personal.tv.link.TvLinkServer.running) {
+                lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    dev.personal.tv.link.TvLinkServer.stop()
+                }
+            }
             requestedOrientation = UiMode.browseOrientation(this)
             enableEdgeToEdge(
                 statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
@@ -105,7 +118,16 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         dev.personal.tv.source.Updater.onResume(this)
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { SpiderClient.reclaimPort() }
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            SpiderClient.reclaimPort()
+            if (!isPhoneMode && dev.personal.tv.data.Prefs.tvLinkEnabled) {
+                if (!dev.personal.tv.link.TvLinkServer.running) dev.personal.tv.link.TvLinkServer.start(applicationContext)
+                else dev.personal.tv.link.TvLinkServer.refreshAddress()
+            }
+        }
+        if (isPhoneMode) {
+            dev.personal.tv.link.TvLinkClient.autoSyncIfDue()
+        }
     }
 
     override fun onStop() {
@@ -116,6 +138,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         labReceiver?.let { unregisterReceiver(it) }
+        if (isFinishing && !isPhoneMode) {
+            Thread { dev.personal.tv.link.TvLinkServer.stop() }.start()
+        }
         super.onDestroy()
     }
 }

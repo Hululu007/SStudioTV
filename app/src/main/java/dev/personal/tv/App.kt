@@ -46,6 +46,7 @@ class App : Application(), ImageLoaderFactory {
             dev.personal.tv.source.PluginNotes.init(this)
             dev.personal.tv.source.Live.init(this)
             dev.personal.tv.data.SearchIndex.init(this)
+            dev.personal.tv.link.TvLinkClient.init(this)
         }
     }
 

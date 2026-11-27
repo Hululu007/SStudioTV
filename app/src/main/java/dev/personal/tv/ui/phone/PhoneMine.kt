@@ -101,9 +101,46 @@ fun PhoneMine(header: Boolean = true) {
     }
     var prefsOpen by remember { mutableStateOf(false) }
     var uiAsk by remember { mutableStateOf<UiMode.Choice?>(null) }
+    val scope = rememberCoroutineScope()
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
         if (header) Tx("我的", 22.sp, weight = FontWeight.ExtraBold, modifier = Modifier.statusBarsPadding().padding(start = PC.Edge, top = 8.dp, bottom = 8.dp))
+
+        Group("电视联动")
+        Card {
+            val tv = dev.personal.tv.link.TvLinkClient.activeTv
+            val tvOnline = dev.personal.tv.link.TvLinkClient.online
+            SettingRow(
+                if (tv == null) "连接电视" else "遥控器 · ${tv.name}",
+                when {
+                    tv == null -> "局域网自动发现电视，支持一键投屏、双向同步想看与进度、手机遥控"
+                    tvOnline -> "在线 · ${tv.host}:${tv.port} · 遥控播放、管理电视片源"
+                    else -> "${tv.host}:${tv.port} · 点开连接或切换电视"
+                },
+                onClick = { nav.openTvRemote() },
+            ) { Arrow() }
+            if (tv != null) {
+                Divider()
+                SettingRow(
+                    if (dev.personal.tv.link.TvLinkClient.syncing) "正在同步…" else "立即同步想看与观看进度",
+                    dev.personal.tv.link.TvLinkClient.lastSyncSummary?.let { "上次同步：$it" }
+                        ?: "将手机与电视的观看进度、想看列表在局域网内双向合并",
+                    onClick = {
+                        if (dev.personal.tv.link.TvLinkClient.syncing) return@SettingRow
+                        scope.launch {
+                            dev.personal.tv.link.TvLinkClient.syncNow().fold(
+                                { r ->
+                                    val tip = if (r.progressUpdated == 0 && r.wishChanged == 0) "已同步，两边都是最新"
+                                    else "同步完成：进度 ${r.progressUpdated} · 想看 ${r.wishChanged}"
+                                    nav.toast(tip)
+                                },
+                                { e -> nav.toast("同步失败：${e.message?.take(56)}") },
+                            )
+                        }
+                    },
+                ) { Arrow() }
+            }
+        }
 
         Group("片源")
         Card {
@@ -277,7 +314,7 @@ fun PhoneMine(header: Boolean = true) {
 }
 
 @Composable
-private fun Group(text: String) =
+internal fun Group(text: String) =
     Tx(text, 13.sp, Palette.T3, FontWeight.SemiBold, modifier = Modifier.padding(start = PC.Edge + 4.dp, top = 18.dp, bottom = 6.dp))
 
 /** 无极调节：拖动时界面跟着变；点右边的百分比恢复默认 */

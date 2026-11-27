@@ -40,6 +40,12 @@ object Prefs {
         get() = _dlMetered
         set(v) { _dlMetered = v; sp?.edit()?.putBoolean("dlMetered", v)?.apply() }
 
+    private var _tvLinkEnabled by mutableStateOf(true)
+    /** 电视端常驻局域网联动服务（默认开启，支持手机投屏、同步与遥控） */
+    var tvLinkEnabled: Boolean
+        get() = _tvLinkEnabled
+        set(v) { _tvLinkEnabled = v; sp?.edit()?.putBoolean("tvLinkEnabled", v)?.apply() }
+
     /**
      * 文字、海报大小（无极调节，1 = 原来的大小）。电视和手机分开存：电视离得远，默认放大；手机有系统字号，默认不动。
      * 文字是整体的字号倍数（[dev.personal.tv.ui.theme.TvScale] / PhoneTheme 里乘到 fontScale 上）；海报改网格列数和首页海报宽度。
@@ -101,6 +107,7 @@ object Prefs {
         _autoLine = p.getBoolean("autoLine", true)
         _precache = p.getBoolean("precache", true)
         _dlMetered = p.getBoolean("dlMetered", false)
+        _tvLinkEnabled = p.getBoolean("tvLinkEnabled", true)
         _searchAll = p.getBoolean("searchAll", true)
         phone = dev.personal.tv.ui.phone.UiMode.phone(ctx)
         // 老版本的三档海报大小（小 / 中 / 大）折算成倍数

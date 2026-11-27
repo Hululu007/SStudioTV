@@ -362,9 +362,17 @@ object Store {
     val progress = mutableStateMapOf<String, Progress>()
     val wish: SnapshotStateList<String> = mutableStateListOf()
     val hidden: SnapshotStateList<String> = mutableStateListOf()
+    val wishOps = mutableStateMapOf<String, dev.personal.tv.link.SyncOp>()
+    val hiddenOps = mutableStateMapOf<String, dev.personal.tv.link.SyncOp>()
 
     private lateinit var file: File
-    private class Saved(val progress: List<Progress>?, val wish: List<String>?, val hidden: List<String>?)
+    private class Saved(
+        val progress: List<Progress>?,
+        val wish: List<String>?,
+        val hidden: List<String>?,
+        val wishOps: Map<String, dev.personal.tv.link.SyncOp>? = null,
+        val hiddenOps: Map<String, dev.personal.tv.link.SyncOp>? = null,
+    )
 
     @OptIn(FlowPreview::class)
     fun init(ctx: Context) {
@@ -376,6 +384,13 @@ object Store {
                 s?.progress?.filter { it != null && it.titleId != null }?.forEach { progress[it.titleId] = it }
                 s?.wish?.filterNotNull()?.let { wish.addAll(it) }
                 s?.hidden?.filterNotNull()?.let { hidden.addAll(it) }
+                @Suppress("SENSELESS_COMPARISON")
+                s?.wishOps?.forEach { (k, v) -> if (k != null && v != null) wishOps[k] = v }
+                @Suppress("SENSELESS_COMPARISON")
+                s?.hiddenOps?.forEach { (k, v) -> if (k != null && v != null) hiddenOps[k] = v }
+                // 兼容老版本 store.json：已有条目给一个基准时间戳 1，不覆盖后续真实操作
+                wish.forEach { id -> wishOps.putIfAbsent(id, dev.personal.tv.link.SyncOp(true, 1L)) }
+                hidden.forEach { id -> hiddenOps.putIfAbsent(id, dev.personal.tv.link.SyncOp(true, 1L)) }
             }
         }.onFailure {
             // 读不出来（写坏了）：先把坏文件留一份，别让下一次保存用空表盖掉，以后还能手动救
@@ -383,13 +398,19 @@ object Store {
             runCatching { file.renameTo(File(file.parentFile, "store.json.bad-${System.currentTimeMillis()}")) }
         }
         appScope.launch {
-            snapshotFlow { Triple(progress.toMap(), wish.toList(), hidden.toList()) }.drop(1).debounce(800).collect { (p, w, h) ->
-                runCatching { saveJson(file, Saved(p.values.toList(), w, h)) }.onFailure { Log.w("Store", "save", it) }
+            snapshotFlow {
+                Saved(progress.values.toList(), wish.toList(), hidden.toList(), wishOps.toMap(), hiddenOps.toMap())
+            }.drop(1).debounce(800).collect { saved ->
+                runCatching { saveJson(file, saved) }.onFailure { Log.w("Store", "save", it) }
             }
         }
     }
 
-    fun hideFromContinue(id: String) { progress[id]?.let { progress[id] = it.copy(hiddenFromContinue = true) } }
+    fun hideFromContinue(id: String) {
+        progress[id]?.let {
+            progress[id] = it.copy(hiddenFromContinue = true, lastWatched = maxOf(it.lastWatched + 1L, System.currentTimeMillis()))
+        }
+    }
 
     fun continueWatching(): List<Pair<Title, Progress>> =
         progress.values.filterNot { it.hiddenFromContinue }.sortedByDescending { it.lastWatched }
@@ -404,11 +425,73 @@ object Store {
     }
 
     fun toggleWish(id: String) {
-        if (id in wish) wish.remove(id) else wish.add(0, id)
+        val now = System.currentTimeMillis()
+        if (id in wish) {
+            wish.remove(id)
+            wishOps[id] = dev.personal.tv.link.SyncOp(present = false, at = now)
+        } else {
+            wish.add(0, id)
+            wishOps[id] = dev.personal.tv.link.SyncOp(present = true, at = now)
+        }
     }
 
     fun hide(id: String) {
+        val now = System.currentTimeMillis()
         if (id !in hidden) hidden.add(id)
-        wish.remove(id)
+        hiddenOps[id] = dev.personal.tv.link.SyncOp(present = true, at = now)
+        if (wish.remove(id)) wishOps[id] = dev.personal.tv.link.SyncOp(present = false, at = now)
+    }
+
+    /** 导出用于局域网双向同步的数据快照（仅含本机记录及相关片目元数据，不含本机片源线路） */
+    fun exportSyncPayload(maxTitles: Int = 200): dev.personal.tv.link.SyncPayload {
+        val progList = progress.values.sortedByDescending { it.lastWatched }
+        val wishList = wish.toList()
+        val ids = LinkedHashSet<String>()
+        progList.forEach { ids += it.titleId }
+        wishList.forEach { ids += it }
+        val titles = ids.take(maxTitles).mapNotNull { Catalog.get(it) }
+        return dev.personal.tv.link.SyncPayload(
+            progress = progList.map { dev.personal.tv.link.LinkSync.sanitizeForWire(it) },
+            wish = wishList,
+            wishOps = wishOps.toMap(),
+            hidden = hidden.toList(),
+            hiddenOps = hiddenOps.toMap(),
+            titles = titles,
+        )
+    }
+
+    /** 将局域网同步合并结果写回本机 Store 与 Catalog（需在主线程调用） */
+    fun applySync(remote: dev.personal.tv.link.SyncPayload): dev.personal.tv.link.LinkSync.MergeResult {
+        val knownIds = (progress.keys + wish + remote.progress.map { it.titleId } + remote.wish).toSet()
+        val localTitles = HashMap<String, Title>()
+        knownIds.forEach { id -> Catalog.get(id)?.let { localTitles[id] = it } }
+        val snapshot = dev.personal.tv.link.LinkSync.StoreSnapshot(
+            progress = progress.toMap(),
+            wish = wish.toList(),
+            wishOps = wishOps.toMap(),
+            hidden = hidden.toList(),
+            hiddenOps = hiddenOps.toMap(),
+            titles = localTitles,
+        )
+        val merged = dev.personal.tv.link.LinkSync.merge(snapshot, remote)
+        if (merged.titlesToUpsert.isNotEmpty()) Catalog.put(merged.titlesToUpsert)
+        merged.progress.forEach { (id, p) ->
+            if (progress[id] != p) progress[id] = p
+        }
+        if (wish.toList() != merged.wish) {
+            wish.clear()
+            wish.addAll(merged.wish)
+        }
+        merged.wishOps.forEach { (id, op) ->
+            if (wishOps[id] != op) wishOps[id] = op
+        }
+        if (hidden.toList() != merged.hidden) {
+            hidden.clear()
+            hidden.addAll(merged.hidden)
+        }
+        merged.hiddenOps.forEach { (id, op) ->
+            if (hiddenOps[id] != op) hiddenOps[id] = op
+        }
+        return merged
     }
 }

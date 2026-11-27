@@ -71,6 +71,7 @@ sealed class Route(val key: String) {
     data object Sources : Route("sources")
     data object Pans : Route("pans")
     data object Downloads : Route("downloads")
+    data object TvRemote : Route("tv_remote")
     class LivePlay(val group: Int, val channel: Int, n: Int) : Route("liveplay:$n")
     class LabPlay(val title: String, val url: String, val headers: Map<String, String>, val parse: Boolean, val format: String?, n: Int) : Route("labplay:$n")
 }
@@ -110,13 +111,34 @@ class Navigator {
     }
 
     fun openDetail(id: String, similar: Boolean = false) = push(Route.Detail(id, similar, ++seq))
-    fun play(id: String, ep: Int, epName: String? = null, openLines: Boolean = false, selected: dev.personal.tv.source.PlayLine? = null) =
-        push(Route.Player(id, ep, epName, openLines, selected, ++seq))
+    fun play(
+        id: String,
+        ep: Int,
+        epName: String? = null,
+        openLines: Boolean = false,
+        selected: dev.personal.tv.source.PlayLine? = null,
+        resumeAtMs: Long = -1,
+    ) = push(Route.Player(id, ep, epName, openLines, selected, ++seq, resumeAtMs))
+    /** 手机投屏接力播：若栈顶已是播放页则直接替换，避免返回栈堆积 */
+    fun castPlay(id: String, ep: Int, epName: String? = null, posMs: Long = -1) {
+        val next = Route.Player(id, ep.coerceAtLeast(1), epName, false, null, ++seq, posMs)
+        val top = stack.lastOrNull()
+        if (top is Route.Player) {
+            memories.keys.filter { it.startsWith(top.key) }.forEach { memories.remove(it) }
+            stack[stack.lastIndex] = next
+        } else {
+            push(next)
+        }
+    }
+    fun goHome() {
+        while (stack.size > 1) back()
+    }
     fun openSearch() = push(Route.Search)
     fun openLab() = push(Route.Lab)
     fun openSettings() = push(Route.Settings)
     fun openSources() = push(Route.Sources)
     fun openPans() = push(Route.Pans)
+    fun openTvRemote() = push(Route.TvRemote)
     /**
      * 播放页里用户自己按键去登录网盘：把栈顶的播放页换成「同一集、同一线路、同一位置」（同一个 key，焦点、状态照旧），
      * 再进网盘登录页；返回后播放页按这个重新来一次。
@@ -153,9 +175,26 @@ class Navigator {
     fun toast(msg: String) { toast = msg; toastSeq++ }
     fun clearToast() { toast = null }
 
-    /** 海报上的通用菜单：打开详情 / 找类似 / 想看 / 不感兴趣 */
+    /** 海报上的通用菜单：打开详情 / 找类似 / 想看 / 不感兴趣（已配对电视时附加投屏入口） */
     fun posterMenu(t: Title, extra: List<MenuItem> = emptyList()) {
         val wished = t.id in Store.wish
+        val castItem = if (dev.personal.tv.link.TvLinkClient.activeTv != null) {
+            listOf(
+                MenuItem("投到电视播放") {
+                    val p = Store.progress[t.id]
+                    val target = p?.let { dev.personal.tv.ui.screens.resumeTarget(t, it) }
+                    val ep = target?.ep ?: 1
+                    val epName = target?.name
+                    val posMs = if (p != null && !p.finishedEp && p.positionSec > 5) p.positionSec * 1000L else -1L
+                    dev.personal.tv.link.TvLinkClient.castAsync(t, ep, epName, posMs) { r ->
+                        r.fold(
+                            { toast(it) },
+                            { e -> toast("投屏失败：${e.message?.take(48)}") },
+                        )
+                    }
+                },
+            )
+        } else emptyList()
         showMenu(
             t,
             listOf(
@@ -165,7 +204,7 @@ class Navigator {
                     Store.toggleWish(t.id)
                     toast(if (wished) "已移出想看" else "已加入想看 · 只存在本机")
                 },
-            ) + extra + MenuItem("不感兴趣") {
+            ) + castItem + extra + MenuItem("不感兴趣") {
                 Store.hide(t.id)
                 toast("不会再推荐《${t.name}》")
             },
@@ -197,6 +236,7 @@ fun AppNav() {
                         Route.Sources -> SourcesScreen()
                         Route.Pans -> PansScreen()
                         Route.Downloads -> SettingsScreen() // 电视上不下载，没有入口
+                        Route.TvRemote -> SettingsScreen() // 遥控器界面仅手机端用
                         is Route.LivePlay -> LivePlayer(r)
                         is Route.LabPlay -> LabPlayer(r)
                     }

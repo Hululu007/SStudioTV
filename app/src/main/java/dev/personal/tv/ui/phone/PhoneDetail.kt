@@ -196,23 +196,35 @@ private fun PlayButtons(t: Title, p: Progress?, ref: PlayLine?, toSimilar: () ->
         else -> "继续播放" to fmtTime(p.positionSec)
     }
     Column(Modifier.padding(horizontal = PC.Edge, vertical = 8.dp)) {
-        BigButton(
-            Modifier.fillMaxWidth(), primary = n > 0 || Sources.empty, height = 48.dp,
-            onClick = {
-                when {
-                    n > 0 -> nav.play(t.id, ep, epName)
-                    Sources.empty -> nav.openSources()
-                    searching -> nav.toast("还在各个站点里找，找到第一条就能播")
-                    else -> {
-                        nav.toast(set?.error ?: "这个片源里没找到《${t.name}》，重新找一遍")
-                        Lines.find(ctx, t, force = true)
+        val castScope = rememberCoroutineScope()
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BigButton(
+                Modifier.weight(1f), primary = n > 0 || Sources.empty, height = 48.dp,
+                onClick = {
+                    when {
+                        n > 0 -> nav.play(t.id, ep, epName)
+                        Sources.empty -> nav.openSources()
+                        searching -> nav.toast("还在各个站点里找，找到第一条就能播")
+                        else -> {
+                            nav.toast(set?.error ?: "这个片源里没找到《${t.name}》，重新找一遍")
+                            Lines.find(ctx, t, force = true)
+                        }
                     }
-                }
-            },
-        ) { fg ->
-            Icon(Icons.Filled.PlayArrow, null, Modifier.size(22.dp), tint = fg)
-            Tx(label, 16.sp, fg, FontWeight.Bold)
-            small?.let { Tx(it, 12.sp, fg.copy(alpha = 0.6f)) }
+                },
+            ) { fg ->
+                Icon(Icons.Filled.PlayArrow, null, Modifier.size(22.dp), tint = fg)
+                Tx(label, 16.sp, fg, FontWeight.Bold)
+                small?.let { Tx(it, 12.sp, fg.copy(alpha = 0.6f)) }
+            }
+            BigButton(
+                Modifier.width(84.dp), height = 48.dp,
+                onClick = {
+                    val posMs = if (p != null && !p.finishedEp && p.positionSec > 5) p.positionSec * 1000L else -1L
+                    castTitleToTv(castScope, nav, t, ep, epName, posMs)
+                },
+            ) { fg ->
+                Tx("投电视", 14.sp, fg, FontWeight.SemiBold)
+            }
         }
         if (p != null && p.fraction > 0f && !p.finishedEp) {
             ThinProgress(p.fraction, Modifier.padding(horizontal = 6.dp, vertical = 6.dp).clip(RoundedCornerShape(2.dp)), Palette.Douban)
